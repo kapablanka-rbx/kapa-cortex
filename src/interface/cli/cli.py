@@ -37,6 +37,11 @@ RESET = "\033[0m"
 def main() -> None:
     args = _parse_args()
 
+    # ── Install skill ──
+    if args.install_skill:
+        _install_claude_skill()
+        return
+
     # ── Daemon ──
     if args.daemon:
         _start_daemon()
@@ -191,6 +196,10 @@ def _parse_args():
     arg_parser.add_argument("--index", action="store_true",
                    help="Pre-compute caches (ctags, imports, co-change, complexity)")
 
+    # Skill
+    arg_parser.add_argument("--install-skill", action="store_true",
+                   help="Install kapa-cortex as a Claude Code skill")
+
     # Daemon
     arg_parser.add_argument("--daemon", action="store_true",
                    help="Start daemon (warm LSPs, in-memory index)")
@@ -251,6 +260,29 @@ def _run_extraction(args, git, llm):
     )
 
 
+def _install_claude_skill():
+    """Install kapa-cortex as a Claude Code skill."""
+    import shutil
+
+    skill_source = Path(__file__).resolve().parent.parent.parent.parent / ".claude" / "skills" / "kapa-cortex"
+    skill_target = Path.home() / ".claude" / "skills" / "kapa-cortex"
+
+    if not skill_source.exists():
+        print(f"  {RED}Skill source not found at {skill_source}{RESET}")
+        sys.exit(1)
+
+    if skill_target.exists():
+        shutil.rmtree(skill_target)
+
+    shutil.copytree(skill_source, skill_target)
+    print(f"  {GREEN}Skill installed to {skill_target}{RESET}")
+    print(f"  Claude Code will auto-trigger on phrases like:")
+    print(f"    {CYAN}\"split this branch into PRs\"{RESET}")
+    print(f"    {CYAN}\"analyze my changes\"{RESET}")
+    print(f"    {CYAN}\"what depends on this file\"{RESET}")
+    print(f"  Or invoke directly: {CYAN}/kapa-cortex{RESET}")
+
+
 def _start_daemon():
     """Start the daemon server."""
     from src.interface.daemon.client import is_daemon_running
@@ -262,10 +294,8 @@ def _start_daemon():
         return
 
     print(f"  {BOLD}Starting kapa-cortex daemon...{RESET}")
-    # TODO: wire real use cases as handlers
-    router = QueryRouter({
-        "status": lambda params: {"running": True, "lsp_servers": []},
-    })
+    from src.interface.daemon.handlers import build_handler_map
+    router = QueryRouter(build_handler_map())
     server = DaemonServer(router)
     print(f"  {GREEN}Listening on unix socket{RESET}")
     server.start()  # blocks

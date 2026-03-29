@@ -8,21 +8,30 @@ from pathlib import Path
 from src.domain.entity.changed_file import ChangedFile
 from src.domain.entity.import_ref import ImportRef
 from src.domain.entity.symbol_def import SymbolDef
+from src.domain.port.definition_resolver import DefinitionResolver
 
 
 def build_dependency_edges(
     files: list[ChangedFile],
     imports_by_file: dict[str, list[ImportRef]],
+    resolver: DefinitionResolver | None = None,
 ) -> list[tuple[str, str, str, float]]:
     """
     Build (source, target, kind, weight) edges.
     source depends on target: target must land first.
+    Uses LSP resolver for precise edges when available,
+    falls back to fuzzy module/symbol matching.
     """
+    changed_paths = {file.path for file in files}
     module_index = _build_module_index(files)
     symbol_index = _build_symbol_index(files)
     edges: list[tuple[str, str, str, float]] = []
 
-    edges.extend(_import_edges(files, imports_by_file, module_index))
+    if resolver:
+        edges.extend(_lsp_edges(files, imports_by_file, resolver, changed_paths))
+    else:
+        edges.extend(_import_edges(files, imports_by_file, module_index))
+
     edges.extend(_symbol_edges(files, symbol_index))
 
     return edges
@@ -51,6 +60,23 @@ def _build_symbol_index(
         for sym in file.symbols_defined:
             index[sym.name].add(file.path)
     return dict(index)
+
+
+def _lsp_edges(
+    files: list[ChangedFile],
+    imports_by_file: dict[str, list[ImportRef]],
+    resolver: DefinitionResolver,
+    changed_paths: set[str],
+) -> list[tuple[str, str, str, float]]:
+    """Precise edges from LSP go-to-definition."""
+    edges = []
+    for file in files:
+        for imp in imports_by_file.get(file.path, []):
+            location = resolver.resolve(file.path, imp.module)
+            if location and location.file_path in changed_paths:
+                if location.file_path != file.path:
+                    edges.append((file.path, location.file_path, "lsp", 1.0))
+    return edges
 
 
 def _import_edges(

@@ -1,18 +1,23 @@
-"""Presentation: JSON output reporter."""
+"""Interface: JSON output reporter."""
 
 from __future__ import annotations
 
 import json
 
 
-def print_json(prs, branch, base, graph):
-    data = {
+def build_json(prs, branch, base, graph) -> dict:
+    """Build JSON-serializable dict from analysis results."""
+    return {
         "branch": branch,
         "base": base,
         "total_prs": len(prs),
         "file_dependency_edges": graph.number_of_edges(),
         "prs": [_pr_to_dict(pr) for pr in prs],
     }
+
+
+def print_json(prs, branch, base, graph):
+    data = build_json(prs, branch, base, graph)
     print(json.dumps(data, indent=2))
 
 

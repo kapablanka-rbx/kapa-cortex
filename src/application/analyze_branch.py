@@ -23,6 +23,7 @@ from src.domain.port.complexity_analyzer import ComplexityAnalyzer
 from src.domain.port.llm_service import LLMService
 from src.domain.port.cochange_provider import CochangeProvider
 from src.domain.port.diff_classifier import DiffClassifier
+from src.domain.port.definition_resolver import DefinitionResolver
 
 
 class AnalyzeBranchUseCase:
@@ -37,6 +38,7 @@ class AnalyzeBranchUseCase:
         llm: LLMService,
         cochange: CochangeProvider,
         diff_classifier: DiffClassifier,
+        resolver: DefinitionResolver | None = None,
     ):
         self._git = git
         self._parser = parser
@@ -45,6 +47,7 @@ class AnalyzeBranchUseCase:
         self._llm = llm
         self._cochange = cochange
         self._diff_classifier = diff_classifier
+        self._resolver = resolver
 
     def execute(
         self,
@@ -61,7 +64,7 @@ class AnalyzeBranchUseCase:
 
         self._enrich(files)
         imports_by_file = self._parse_imports(files)
-        edges = build_dependency_edges(files, imports_by_file)
+        edges = build_dependency_edges(files, imports_by_file, self._resolver)
 
         dep_graph = self._build_graph(files, edges)
         topo = self._topo_sort(dep_graph)
