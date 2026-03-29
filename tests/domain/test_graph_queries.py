@@ -153,31 +153,42 @@ class TestFindCallImpact(unittest.TestCase):
 
 
 class TestFindSymbolImpact(unittest.TestCase):
-    """Full blast radius: call graph + file dependencies."""
+    """Pure call-graph blast radius."""
 
-    def test_combines_callers_and_dependents(self):
+    def test_returns_call_chains(self):
         calls = {
             ("foo", "a.py"): [
                 CallEntry("b.py", "bar", "a.py", "foo", 10),
             ],
+            ("bar", "b.py"): [
+                CallEntry("c.py", "baz", "b.py", "bar", 5),
+            ],
         }
         get_callers = lambda name, file: calls.get((name, file), [])
-        dependents = {"b.py": ["c.py", "d.py"]}
-        get_dependents = lambda path: dependents.get(path, [])
 
-        result = find_symbol_impact(
-            "foo", "a.py", get_callers, get_dependents,
-        )
-        self.assertEqual(result.caller_files, ["b.py"])
-        self.assertIn("b.py", result.affected_files)
-        self.assertIn("c.py", result.affected_files)
-        self.assertIn("d.py", result.affected_files)
+        result = find_symbol_impact("foo", "a.py", get_callers)
+        self.assertEqual(len(result.call_chains), 2)
+        self.assertEqual(result.affected_files, ["b.py", "c.py"])
+
+    def test_intra_file_calls(self):
+        calls = {
+            ("foo", "a.py"): [
+                CallEntry("a.py", "bar", "a.py", "foo", 10),
+            ],
+            ("bar", "a.py"): [
+                CallEntry("a.py", "baz", "a.py", "bar", 5),
+            ],
+        }
+        get_callers = lambda name, file: calls.get((name, file), [])
+
+        result = find_symbol_impact("foo", "a.py", get_callers)
+        self.assertEqual(len(result.call_chains), 2)
+        self.assertEqual(result.affected_files, ["a.py"])
 
     def test_no_callers_no_impact(self):
         result = find_symbol_impact(
             "lonely", "z.py",
             lambda name, file: [],
-            lambda path: [],
         )
         self.assertEqual(result.total_affected, 0)
 

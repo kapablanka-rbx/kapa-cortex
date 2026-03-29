@@ -113,7 +113,7 @@ def _query_local(action: str, params: dict) -> dict:
     from src.infrastructure.indexer.incremental_indexer import build_full
     from src.interface.daemon.handlers import (
         handle_impact, handle_deps, handle_hotspots, handle_calls,
-        set_index_store,
+        handle_symbol_file_impact, set_index_store,
     )
 
     store = build_full()
@@ -124,6 +124,7 @@ def _query_local(action: str, params: dict) -> dict:
         "deps": handle_deps,
         "hotspots": handle_hotspots,
         "calls": handle_calls,
+        "symbol_file_impact": handle_symbol_file_impact,
     }
     handler = handlers.get(action)
     if not handler:
@@ -142,41 +143,50 @@ def _cmd_impact(args):
         print(f"  {RED}Provide a file or --symbol NAME{RESET}")
         sys.exit(1)
 
-    if args.symbol:
-        data = _query_or_local("calls", {"target": args.symbol})
-    else:
-        data = _query_or_local("impact", {"target": target})
-
-    if args.json:
-        print(json_mod.dumps(data, indent=2))
+    if args.symbol and args.files:
+        # --symbol + --files: file-level impact from the symbol's file
+        data = _query_or_local("symbol_file_impact", {"target": args.symbol})
+        if args.json:
+            print(json_mod.dumps(data, indent=2))
+        else:
+            _print_file_impact(data)
     elif args.symbol:
-        _print_symbol_impact(data)
+        # --symbol (default --calls): call graph impact
+        data = _query_or_local("calls", {"target": args.symbol})
+        if args.json:
+            print(json_mod.dumps(data, indent=2))
+        else:
+            _print_symbol_impact(data)
     else:
-        _print_file_impact(data)
+        # positional file: file-level impact
+        data = _query_or_local("impact", {"target": target})
+        if args.json:
+            print(json_mod.dumps(data, indent=2))
+        else:
+            _print_file_impact(data)
 
 
 def _print_symbol_impact(data: dict) -> None:
-    """Print symbol impact results."""
+    """Print symbol impact as an indented call chain."""
     symbol = data.get("symbol", "")
     target_file = data.get("file", "")
-    caller_files = data.get("caller_files", [])
+    chains = data.get("call_chains", [])
     affected_files = data.get("affected_files", [])
-    total = data.get("total_affected", 0)
-    caller_set = set(caller_files)
 
     print(f"\n  {BOLD}Impact of {CYAN}{symbol}{RESET}" +
           (f" ({target_file})" if target_file else "") + ":")
-    if caller_files:
-        print(f"  Caller files ({len(caller_files)}):")
-        for path in caller_files:
-            print(f"    {path}")
-    if affected_files:
-        print(f"  Total blast radius ({total} files):")
-        for path in affected_files:
-            marker = "  ←call" if path in caller_set else "  ←dep"
-            print(f"    {path}{DIM}{marker}{RESET}")
-    if total == 0:
-        print(f"  {DIM}No cross-file impact found.{RESET}")
+    if chains:
+        print(f"  Call chain ({len(chains)} calls, {len(affected_files)} files):")
+        for chain in chains:
+            caller = chain.get("caller_function", "")
+            caller_file = chain.get("caller_file", "")
+            callee = chain.get("callee_function", "")
+            line = chain.get("line", 0)
+            depth = chain.get("depth", 0)
+            indent = "  " * depth
+            print(f"    {indent}{caller}() → {callee}()  {DIM}{caller_file}:{line}{RESET}")
+    if not chains:
+        print(f"  {DIM}No callers found.{RESET}")
     print()
 
 
@@ -401,8 +411,10 @@ def _parse_args():
 
     # ── impact ──
     impact_parser = subparsers.add_parser("impact", help="What breaks if this changes")
-    impact_parser.add_argument("file", nargs="?", default=None, help="File to analyze (file-to-file impact)")
-    impact_parser.add_argument("--symbol", type=str, metavar="NAME", help="Symbol to analyze (call graph + file deps)")
+    impact_parser.add_argument("file", nargs="?", help="File to analyze (file-to-file impact)")
+    impact_parser.add_argument("--symbol", type=str, metavar="NAME", help="Symbol to analyze")
+    impact_parser.add_argument("--calls", action="store_true", help="Call graph impact (default for --symbol)")
+    impact_parser.add_argument("--files", action="store_true", help="File-level dependency impact")
     impact_parser.add_argument("--json", action="store_true", help="JSON output")
     impact_parser.set_defaults(func=_cmd_impact)
 

@@ -26,6 +26,7 @@ class CallChain:
     callee_file: str
     callee_function: str
     line: int
+    depth: int = 0
 
 
 @dataclass
@@ -133,6 +134,7 @@ def find_call_impact(
             callee_file=call.callee_file,
             callee_function=call.callee_function,
             line=call.line,
+            depth=0,
         )
         for call in get_callers(symbol_name, target_file)
     ]
@@ -157,6 +159,7 @@ def find_call_impact(
                 callee_file=call.callee_file,
                 callee_function=call.callee_function,
                 line=call.line,
+                depth=depth,
             )
             transitive.append(chain)
             key = (call.caller_function, call.caller_file)
@@ -174,55 +177,40 @@ def find_call_impact(
 
 @dataclass
 class SymbolImpactResult:
-    """Full blast radius of a symbol: call graph + file dependencies."""
+    """Pure call-graph blast radius of a symbol."""
     target_symbol: str
     target_file: str
-    caller_files: list[str]
-    affected_files: list[str]
+    call_chains: list[CallChain]
 
     @property
     def total_affected(self) -> int:
-        return len(self.affected_files)
+        return len(self.call_chains)
+
+    @property
+    def affected_files(self) -> list[str]:
+        return sorted({chain.caller_file for chain in self.call_chains})
 
 
 def find_symbol_impact(
     symbol_name: str,
     target_file: str,
     get_callers: callable,
-    get_dependents: callable,
-    max_depth: int = 5,
+    max_depth: int = 10,
 ) -> SymbolImpactResult:
-    """Full impact of a symbol: trace call graph, then fan out via file deps.
+    """Pure call-graph impact: trace all callers transitively.
 
-    1. Find all files containing callers (direct + transitive) of the symbol.
-    2. For each caller file, walk reverse import edges to find affected files.
+    Returns every function in the call chain that leads to this symbol.
     """
     call_result = find_call_impact(
         symbol_name, target_file, get_callers, max_depth,
     )
 
-    caller_files: set[str] = set()
-    for chain in call_result.direct_callers:
-        caller_files.add(chain.caller_file)
-    for chain in call_result.transitive_callers:
-        caller_files.add(chain.caller_file)
-
-    affected: set[str] = set(caller_files)
-    target_file = call_result.target_file
-    if target_file:
-        affected.add(target_file)
-
-    for caller_file in caller_files:
-        dependents = _bfs_reverse(caller_file, get_dependents, max_depth=5)
-        affected.update(dependents)
-
-    affected.discard(target_file)
+    all_chains = call_result.direct_callers + call_result.transitive_callers
 
     return SymbolImpactResult(
         target_symbol=symbol_name,
         target_file=target_file,
-        caller_files=sorted(caller_files),
-        affected_files=sorted(affected),
+        call_chains=all_chains,
     )
 
 

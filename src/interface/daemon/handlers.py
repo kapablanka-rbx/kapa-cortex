@@ -109,7 +109,7 @@ def handle_hotspots(params: dict) -> dict:
 
 
 def handle_calls(params: dict) -> dict:
-    """Find full symbol impact: call graph + file dependencies."""
+    """Find symbol impact via pure call graph."""
     from src.domain.service.graph_queries import find_symbol_impact
 
     symbol = params.get("target")
@@ -124,13 +124,22 @@ def handle_calls(params: dict) -> dict:
     target_file = files[0]
 
     result = find_symbol_impact(
-        symbol, target_file, store.get_callers, store.get_dependents,
+        symbol, target_file, store.get_callers,
     )
     return {
         "query": "symbol_impact",
         "symbol": result.target_symbol,
         "file": result.target_file,
-        "caller_files": result.caller_files,
+        "call_chains": [
+            {
+                "caller_function": chain.caller_function,
+                "caller_file": chain.caller_file,
+                "callee_function": chain.callee_function,
+                "line": chain.line,
+                "depth": chain.depth,
+            }
+            for chain in result.call_chains
+        ],
         "affected_files": result.affected_files,
         "total_affected": result.total_affected,
     }
@@ -167,6 +176,31 @@ def _get_index_store():
     return _index_store
 
 
+def handle_symbol_file_impact(params: dict) -> dict:
+    """Find file-level impact for a symbol's file."""
+    from src.domain.service.graph_queries import find_impact
+
+    symbol = params.get("target")
+    if not symbol:
+        raise ValueError("Missing 'target' parameter (symbol name)")
+
+    store = _get_index_store()
+    files = store.get_files_defining_symbol(symbol)
+    if not files:
+        raise ValueError(f"Symbol not found in index: {symbol}")
+    target_file = files[0]
+
+    result = find_impact(target_file, store.get_dependents)
+    return {
+        "query": "file_impact",
+        "symbol": symbol,
+        "target": result.target,
+        "direct": result.direct,
+        "transitive": result.transitive,
+        "total_affected": result.total_affected,
+    }
+
+
 def build_handler_map(server=None) -> dict:
     """Build action → handler mapping for the query router."""
     handlers = {
@@ -175,6 +209,7 @@ def build_handler_map(server=None) -> dict:
         "deps": handle_deps,
         "hotspots": handle_hotspots,
         "calls": handle_calls,
+        "symbol_file_impact": handle_symbol_file_impact,
         "status": handle_status,
     }
     if server:

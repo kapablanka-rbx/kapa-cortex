@@ -120,10 +120,11 @@ def _build_edges(store: IndexStore, root: str = ".") -> None:
 
 
 def _load_and_resolve_calls(store: IndexStore, root: str) -> None:
-    """Load raw call sites from cache and resolve to cross-file edges.
+    """Load raw call sites and resolve callee files.
 
-    Only resolves a call when the caller has a dependency edge to the
-    callee's file — prevents false matches on common function names.
+    Stores both intra-file and cross-file calls for full call graph.
+    Cross-file calls require import edge or unambiguous symbol match.
+    Intra-file calls resolve to the caller's own file.
     """
     raw_calls = load_call_cache(root) or {}
 
@@ -148,10 +149,24 @@ def _load_and_resolve_calls(store: IndexStore, root: str) -> None:
         caller_file = _normalize_path(raw_caller)
         caller_deps = deps_of.get(caller_file, set())
         caller_imports = imports_of.get(caller_file, set())
+
         for call in call_list:
             callee_name = call.get("callee_name", "")
-            candidate_files = symbol_to_files.get(callee_name, [])
+            caller_function = call.get("caller_function", "")
 
+            # Intra-file: callee defined in same file
+            if caller_file in symbol_to_files.get(callee_name, []):
+                store.add_call(CallEntry(
+                    caller_file=caller_file,
+                    caller_function=caller_function,
+                    callee_file=caller_file,
+                    callee_function=callee_name,
+                    line=call.get("line", 0),
+                ))
+                continue
+
+            # Cross-file: resolve to external file
+            candidate_files = symbol_to_files.get(callee_name, [])
             callee_file = _pick_callee_file(
                 caller_file, candidate_files, caller_deps, caller_imports,
             )
@@ -160,7 +175,7 @@ def _load_and_resolve_calls(store: IndexStore, root: str) -> None:
 
             store.add_call(CallEntry(
                 caller_file=caller_file,
-                caller_function=call.get("caller_function", ""),
+                caller_function=caller_function,
                 callee_file=callee_file,
                 callee_function=callee_name,
                 line=call.get("line", 0),

@@ -31,6 +31,7 @@
 
 - **Max 3 parameters.** Use dataclasses or config objects when more are needed.
 - **Max 30 lines** per function. Sweet spot is **10-15 lines**.
+- **No default parameter values.** Pass values explicitly at the call site.
 - Small, composable, easy to test.
 - Prefer pure functions (input → output, no side effects) in domain layer.
 
