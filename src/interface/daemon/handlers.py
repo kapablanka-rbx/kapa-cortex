@@ -53,6 +53,8 @@ def handle_impact(params: dict) -> dict:
         raise ValueError("Missing 'target' parameter")
 
     store = _get_index_store()
+    if target not in store.files:
+        raise ValueError(f"File not found in index: {target}")
     result = find_impact(target, store.get_dependents)
     return {
         "query": "impact",
@@ -72,6 +74,8 @@ def handle_deps(params: dict) -> dict:
         raise ValueError("Missing 'target' parameter")
 
     store = _get_index_store()
+    if target not in store.files:
+        raise ValueError(f"File not found in index: {target}")
     deps = find_deps(target, store.get_dependencies)
     return {
         "query": "deps",

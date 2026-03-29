@@ -116,7 +116,10 @@ def _cmd_scan(args):
     target = getattr(args, "file", None)
 
     if target:
-        # Default: impact analysis when a file is given
+        if target not in store.files:
+            print(f"  {RED}File not found in index: {target}{RESET}")
+            print(f"  Run {CYAN}kapa-cortex index{RESET} to rebuild.")
+            sys.exit(1)
         _print_impact(find_impact(target, store.get_dependents), args.json, json_mod)
 
     elif args.hotspots:
