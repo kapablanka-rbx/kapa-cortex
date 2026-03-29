@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from src.infrastructure.indexer.index_store import (
-    IndexStore, FileEntry, SymbolEntry, ImportEntry, EdgeEntry,
+    IndexStore, FileEntry, SymbolEntry, ImportEntry, EdgeEntry, CallEntry,
 )
 
 
@@ -79,6 +79,80 @@ class TestIndexStore(unittest.TestCase):
         self.assertEqual(store.symbol_count, 0)
         self.assertEqual(store.edge_count, 0)
         self.assertEqual(store.get_dependents("nope"), [])
+
+
+class TestStrongNameCallers(unittest.TestCase):
+    """Call graph queries using (function, file) strong names."""
+
+    def _build_call_store(self):
+        store = IndexStore()
+        store.add_file(FileEntry("a.py", "python", "h1", 10))
+        store.add_file(FileEntry("b.py", "python", "h2", 20))
+        store.add_file(FileEntry("c.py", "python", "h3", 30))
+        # Same function name 'foo' defined in both a.py and b.py
+        store.add_symbols("a.py", [
+            SymbolEntry("foo", "function", 1, "", "a.py"),
+        ])
+        store.add_symbols("b.py", [
+            SymbolEntry("foo", "function", 1, "", "b.py"),
+            SymbolEntry("bar", "function", 5, "", "b.py"),
+        ])
+        # bar() in b.py calls foo() in a.py
+        store.add_call(CallEntry(
+            caller_file="b.py", caller_function="bar",
+            callee_file="a.py", callee_function="foo", line=6,
+        ))
+        # baz() in c.py calls foo() in b.py (different foo!)
+        store.add_call(CallEntry(
+            caller_file="c.py", caller_function="baz",
+            callee_file="b.py", callee_function="foo", line=3,
+        ))
+        return store
+
+    def test_strong_name_distinguishes_same_name(self):
+        store = self._build_call_store()
+        calls_a = store.get_callers("foo", "a.py")
+        calls_b = store.get_callers("foo", "b.py")
+        self.assertEqual(len(calls_a), 1)
+        self.assertEqual(calls_a[0].caller_function, "bar")
+        self.assertEqual(len(calls_b), 1)
+        self.assertEqual(calls_b[0].caller_function, "baz")
+
+    def test_by_name_returns_all(self):
+        store = self._build_call_store()
+        all_calls = store.get_callers_by_name("foo")
+        self.assertEqual(len(all_calls), 2)
+
+    def test_nonexistent_strong_name(self):
+        store = self._build_call_store()
+        self.assertEqual(store.get_callers("foo", "c.py"), [])
+
+    def test_nonexistent_name(self):
+        store = self._build_call_store()
+        self.assertEqual(store.get_callers_by_name("nonexistent"), [])
+
+    def test_call_count(self):
+        store = self._build_call_store()
+        self.assertEqual(store.call_count, 2)
+
+    def test_save_load_preserves_strong_names(self):
+        store = self._build_call_store()
+        with tempfile.NamedTemporaryFile(suffix=".msgpack", delete=False) as tmp:
+            path = tmp.name
+        store.save(path)
+        loaded = IndexStore.load(path)
+        calls_a = loaded.get_callers("foo", "a.py")
+        calls_b = loaded.get_callers("foo", "b.py")
+        self.assertEqual(len(calls_a), 1)
+        self.assertEqual(calls_a[0].caller_function, "bar")
+        self.assertEqual(len(calls_b), 1)
+        self.assertEqual(calls_b[0].caller_function, "baz")
+
+    def test_remove_file_clears_call_indexes(self):
+        store = self._build_call_store()
+        store.remove_file("b.py")
+        self.assertEqual(store.get_callers("foo", "a.py"), [])
+        self.assertEqual(store.get_callers("foo", "b.py"), [])
 
 
 if __name__ == "__main__":
