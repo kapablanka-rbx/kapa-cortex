@@ -1,14 +1,12 @@
-"""Infrastructure: Ollama LLM backend."""
+"""Infrastructure: LLM service implementations."""
 
 from __future__ import annotations
 
 from src.domain.ports.llm_service import LLMResponse, LLMService
-
-# Re-use existing ollama implementation
-from llm_backend import (
-    OllamaBackend as _OllamaBackend,
-    LlamaCppBackend as _LlamaCppBackend,
-    NullBackend as _NullBackend,
+from src.infrastructure.llm.backends import (
+    OllamaBackend as _Ollama,
+    LlamaCppBackend as _LlamaCpp,
+    NullBackend as _Null,
     get_llm as _get_llm,
     check_backends as _check_backends,
     parse_json_response as _parse_json,
@@ -16,12 +14,12 @@ from llm_backend import (
     build_grouping_prompt,
     build_pr_description_prompt,
     SYSTEM_PROMPT,
+    LLMResponse as _RawResponse,
 )
-from llm_backend import LLMResponse as _RawResponse
 
 
 class OllamaLLMService(LLMService):
-    """Wraps the ollama/llama-cpp backend to implement the LLMService port."""
+    """Wraps ollama/llama-cpp to implement LLMService port."""
 
     def __init__(
         self,
@@ -66,10 +64,7 @@ class NullLLMService(LLMService):
         return False
 
     def query(self, prompt: str, **kwargs) -> LLMResponse:
-        return LLMResponse(
-            text="", model="", backend="none",
-            error="LLM disabled",
-        )
+        return LLMResponse(text="", model="", backend="none", error="LLM disabled")
 
 
 def check_llm_backends() -> dict:

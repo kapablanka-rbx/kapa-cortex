@@ -37,7 +37,7 @@ def main() -> None:
 
     # ── Setup ──
     if args.setup or args.setup_minimal:
-        from setup_ollama import run_setup
+        from src.infrastructure.llm.setup_ollama import run_setup
         success = run_setup(model=args.ai_model, minimal=args.setup_minimal)
         sys.exit(0 if success else 1)
 

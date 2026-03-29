@@ -4,7 +4,7 @@ Split feature branches into reviewable, dependency-ordered stacked PRs.
 
 Analyzes code dependencies across 15+ languages, groups files into small PRs
 (~3 files, ~200 lines), generates git commands to create the branches, and
-optionally uses a local LLM (ollama) for smarter grouping and PR descriptions.
+uses a local LLM (ollama) for smarter grouping and PR descriptions.
 
 ## Install
 
@@ -18,18 +18,15 @@ kapa-stacker --help
 Or without installing:
 
 ```bash
-pip install -r requirements.txt
+pip install networkx
 python kapa-stacker.py --help
 ```
 
 ## Quick Start
 
 ```bash
-# Setup local LLM (optional — AI is on by default, falls back silently)
-kapa-stacker --setup
-
-# Analyze your branch and see proposed PRs
-kapa-stacker --base main
+# On your feature branch, analyze and see proposed stacked PRs
+kapa-stacker
 
 # Generate an execution plan with all git commands
 kapa-stacker --generate-plan
@@ -40,8 +37,11 @@ kapa-stacker --check-plan
 # Execute the plan (interactive, with retry/skip)
 kapa-stacker --run-plan
 
-# Dry run (preview without executing)
+# Dry run first (preview without executing)
 kapa-stacker --run-plan --dry-run
+
+# If your base branch isn't main
+kapa-stacker --base develop
 ```
 
 ## Extract Specific Changes
@@ -72,11 +72,17 @@ AI is **on by default** using ollama. If ollama isn't running, it silently
 falls back to rule-based analysis. No API keys needed.
 
 ```bash
-kapa-stacker --setup              # install ollama + pull model
-kapa-stacker --setup-minimal      # smallest model (~1.6 GB)
-kapa-stacker --ai-check           # check status
-kapa-stacker --no-ai              # disable AI
-kapa-stacker --ai-model qwen2.5-coder:7b  # specific model
+# First time setup (installs ollama, pulls model, smoke tests it)
+kapa-stacker --setup
+
+# Use smallest model (~1.6 GB)
+kapa-stacker --setup-minimal
+
+# Check what's available
+kapa-stacker --ai-check
+
+# Disable AI
+kapa-stacker --no-ai
 ```
 
 ## Supported Languages
@@ -84,23 +90,52 @@ kapa-stacker --ai-model qwen2.5-coder:7b  # specific model
 Python, C, C++, Java, Kotlin, Go, Rust, JavaScript, TypeScript,
 Gradle (Groovy + KTS), CMake, Buck2, BXL, Starlark/Bazel, Groovy.
 
-Import parsing uses a layered strategy: tree-sitter, ast-grep, Python ast,
-universal-ctags, regex.
-
 ## Architecture (DDD + Layers)
 
 ```
 src/
-  domain/            # Core business logic, pure Python, zero external deps
-    ports/           # Interfaces (GitReader, ImportParser, LLMService, etc.)
-  application/       # Use cases (AnalyzeBranch, ExtractFiles, GeneratePlan)
-  infrastructure/    # Git, parsers, LLM backends, persistence
-  presentation/      # CLI, text/JSON/DOT/mermaid reporters
-tests/
-  domain/            # Fast, no-mock domain tests
-  infrastructure/    # Integration tests
-  application/       # Use case tests
-  presentation/      # Output format tests
+  domain/                          # Pure logic, zero external deps
+    changed_file.py                  Entity
+    proposed_pr.py                   Entity
+    execution_plan.py                Entity (PlanStep, PRPlan)
+    import_ref.py                    Value object
+    symbol_def.py                    Value object
+    file_complexity.py               Value object
+    risk_score.py                    Value object
+    merge_strategy.py                Enum
+    step_status.py                   Enum
+    extraction_rule.py               Value object
+    test_pair.py                     Value object
+    dependency_resolver.py           Service
+    file_grouper.py                  Service
+    test_pair_finder.py              Service
+    risk_scorer.py                   Service
+    merge_strategy_assigner.py       Service
+    merge_order_resolver.py          Service
+    file_matcher.py                  Service
+    prompt_parser.py                 Service
+    pr_namer.py                      Service
+    ports/                           Interfaces
+      git_reader.py, import_parser.py, symbol_extractor.py,
+      complexity_analyzer.py, llm_service.py, plan_persistence.py,
+      command_runner.py
+
+  application/                     # Use cases
+    analyze_branch.py                Full analysis pipeline
+    extract_files.py                 Prompt-driven extraction
+    generate_plan.py                 Git execution plan
+    execute_plan.py                  Run plan steps
+
+  infrastructure/                  # All I/O
+    git/                             GitClient, ShellCommandRunner
+    parsers/                         Language detection, regex/AST parsers
+    complexity/                      lizard, scc analyzers
+    llm/                             Ollama, llama-cpp backends, setup
+    persistence/                     JSON plan store
+
+  presentation/                    # CLI + output
+    cli.py                           Entry point
+    reporters/                       text, JSON, DOT, mermaid, plan
 ```
 
 ## Running Tests
