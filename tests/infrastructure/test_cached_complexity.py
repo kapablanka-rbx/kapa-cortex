@@ -12,7 +12,7 @@ class TestCachedComplexityAnalyzer(unittest.TestCase):
 
     def test_loads_from_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            cache_dir = os.path.join(tmpdir, ".stacker-cache")
+            cache_dir = os.path.join(tmpdir, ".cortex-cache")
             os.makedirs(cache_dir)
             data = {
                 "src/foo.py": {
@@ -46,7 +46,7 @@ class TestCachedComplexityAnalyzer(unittest.TestCase):
 
     def test_missing_file_falls_back(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            cache_dir = os.path.join(tmpdir, ".stacker-cache")
+            cache_dir = os.path.join(tmpdir, ".cortex-cache")
             os.makedirs(cache_dir)
             with open(os.path.join(cache_dir, "complexity.json"), "w") as f:
                 json.dump({}, f)

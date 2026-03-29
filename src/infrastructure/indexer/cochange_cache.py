@@ -6,7 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 
-CACHE_FILE = ".stacker-cache/cochange.json"
+CACHE_FILE = ".cortex-cache/cochange.json"
 
 
 def build_cochange_matrix(
@@ -16,7 +16,7 @@ def build_cochange_matrix(
     """
     Analyze git log to find files that change together.
     Returns {"fileA::fileB": count} (sorted key pair).
-    Caches to .stacker-cache/cochange.json.
+    Caches to .cortex-cache/cochange.json.
     """
     cache_path = Path(root) / CACHE_FILE
     cache_path.parent.mkdir(parents=True, exist_ok=True)

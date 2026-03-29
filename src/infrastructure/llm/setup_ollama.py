@@ -376,9 +376,9 @@ def run_setup(
     print(f"  {GREEN}Setup complete!{RESET}")
     print(f"  Model: {CYAN}{target_model}{RESET}")
     print(f"\n  {BOLD}Usage:{RESET}")
-    print(f"    {CYAN}python stacked_pr_analyzer.py --ai{RESET}")
-    print(f"    {CYAN}python stacked_pr_analyzer.py --ai --extract \"auth changes\"{RESET}")
-    print(f"    {CYAN}python stacked_pr_analyzer.py --ai --generate-plan{RESET}")
+    print(f"    {CYAN}kapa-cortex{RESET}")
+    print(f"    {CYAN}kapa-cortex --extract \"auth changes\"{RESET}")
+    print(f"    {CYAN}kapa-cortex --generate-plan{RESET}")
     print(f"{BOLD}{'=' * 50}{RESET}\n")
 
     return True

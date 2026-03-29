@@ -29,14 +29,14 @@ _SOURCE_EXTENSIONS = {
 _SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".mypy_cache",
     "venv", ".venv", "env", ".env", "dist", "build",
-    ".stacker-cache", ".tox", ".pytest_cache",
+    ".cortex-cache", ".tox", ".pytest_cache",
 }
 
 
 def index_repo(root: str = ".") -> dict[str, float]:
     """
     Run all indexers and return timing info.
-    Creates .stacker-cache/ with:
+    Creates .cortex-cache/ with:
       - tags.json       (ctags symbol index)
       - imports.json    (import graph, hash-cached)
       - cochange.json   (co-change matrix from git log)
@@ -56,7 +56,7 @@ def index_repo(root: str = ".") -> dict[str, float]:
 
     total = sum(timings.values())
     print(f"\n  {GREEN}Done{RESET} in {total:.1f}s")
-    print(f"  Cache: {CYAN}.stacker-cache/{RESET}")
+    print(f"  Cache: {CYAN}.cortex-cache/{RESET}")
     print()
     return timings
 

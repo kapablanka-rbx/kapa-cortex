@@ -87,7 +87,7 @@ These run on the local CPU — faster, cheaper, and more precise.
 4. `scc` or `lizard` for repo shape and metrics. Never hand-count or guess.
 5. `rg` (ripgrep) as last resort for unstructured text search. Never use `grep`.
 
-At the end of code nagivation generate a report with each tool used, what you searched for, and what you found. This will be crucial for debugging and improving the agent's code navigation skills over time. Also the report should include false positives( files, lines, or symbols that were returned but turned out to be irrelevant) and false negatives (files, lines, or symbols that were relevant but were not returned by the search). This will help in refining the search queries and improving the accuracy of the tools used.
+At the end of every prompt generate a navigation report with: tool used, query, results found, lines read, tokens consumed, false positives (files/lines/symbols returned but irrelevant), and false negatives (relevant items missed). Include sub-agent data. This is crucial for debugging and improving code navigation accuracy over time.
 
 Only read files when you need full context after narrowing down with the tools above.
 

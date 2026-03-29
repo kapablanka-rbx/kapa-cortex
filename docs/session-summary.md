@@ -51,7 +51,7 @@ src/
 - **Domain has zero external imports.** Pure Python, testable without mocks.
 - **Old flat files deleted.** No `stacked_pr_analyzer.py`, `lang_parsers.py` etc. at root.
 - **Entry point:** `kapa-cortex` command (via `pyproject.toml`) or `python kapa-cortex.py`.
-- **Caches** go to `.stacker-cache/` (gitignored).
+- **Caches** go to `.cortex-cache/` (gitignored).
 
 ## CLI Commands
 
@@ -60,7 +60,7 @@ kapa-cortex                          # analyze current branch vs main
 kapa-cortex --base develop           # diff against a different base
 kapa-cortex --setup                  # install ALL deps (ollama, ctags, scc, ast-grep, lizard)
 kapa-cortex --index                  # pre-compute caches (ctags, imports, co-change, complexity)
-kapa-cortex --generate-plan          # create .stacked-pr-plan.json with git commands
+kapa-cortex --generate-plan          # create .cortex-plan.json with git commands
 kapa-cortex --check-plan             # show plan progress
 kapa-cortex --run-plan               # execute plan interactively
 kapa-cortex --run-plan --dry-run     # preview without executing
@@ -93,7 +93,7 @@ python -m unittest discover -s tests -v                  # 99 total
 
 1. **`lang_parsers.py` legacy file** — still at `src/infrastructure/parsers/lang_parsers.py` alongside the new split files. Can be deleted once the new import dispatcher is fully wired and the old monolith has no remaining consumers.
 2. **Application + presentation tests** — not yet written. Only domain and infrastructure tests exist (99 total).
-3. **Indexer caches not consumed yet** — the `--index` command builds caches to `.stacker-cache/`, but the `AnalyzeBranchUseCase` still does live parsing. Need to wire the use case to check caches first.
+3. **Indexer caches not consumed yet** — the `--index` command builds caches to `.cortex-cache/`, but the `AnalyzeBranchUseCase` still does live parsing. Need to wire the use case to check caches first.
 4. **`GeneratePlanUseCase` vs `PlanFactory`** — the application use case duplicates some logic from the domain factory. Should consolidate: use case calls factory, factory owns the creation logic.
 5. **Aggregate root not fully wired** — `StackedPRSet` exists but the analysis pipeline still returns raw lists of `ProposedPR` instead of the aggregate. The use case should return a `StackedPRSet`.
 6. **No integration tests** — the infrastructure tests test individual parsers but not the full pipeline (git diff -> parse -> group -> plan).

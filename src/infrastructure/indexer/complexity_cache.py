@@ -8,7 +8,7 @@ from pathlib import Path
 
 from src.infrastructure.complexity.analyzer import LizardAnalyzer
 
-CACHE_FILE = ".stacker-cache/complexity.json"
+CACHE_FILE = ".cortex-cache/complexity.json"
 
 
 def build_complexity_index(

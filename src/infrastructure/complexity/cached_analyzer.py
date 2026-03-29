@@ -9,7 +9,7 @@ from src.infrastructure.indexer.complexity_cache import load_complexity_cache
 
 
 class CachedComplexityAnalyzer(ComplexityAnalyzer):
-    """Checks .stacker-cache/complexity.json first, falls back to live analysis."""
+    """Checks .cortex-cache/complexity.json first, falls back to live analysis."""
 
     def __init__(self, root: str = "."):
         self._root = root

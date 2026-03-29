@@ -156,7 +156,7 @@ def main() -> None:
 
 
 def _parse_args():
-    arg_parser = argparse.ArgumentParser(description="Split branches into stacked PRs.")
+    arg_parser = argparse.ArgumentParser(description="kapa-cortex — local code intelligence engine.")
 
     arg_parser.add_argument("--base", default=None)
     arg_parser.add_argument("--max-files", type=int, default=3)
@@ -174,7 +174,7 @@ def _parse_args():
     arg_parser.add_argument("--print-commands", action="store_true")
     arg_parser.add_argument("--shell-script", action="store_true")
     arg_parser.add_argument("--no-gh", action="store_true")
-    arg_parser.add_argument("--plan-file", default=".stacked-pr-plan.json")
+    arg_parser.add_argument("--plan-file", default=".cortex-plan.json")
 
     arg_parser.add_argument("--extract", type=str, metavar="PROMPT")
     arg_parser.add_argument("--extract-branch", type=str)

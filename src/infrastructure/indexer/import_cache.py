@@ -8,7 +8,7 @@ from pathlib import Path
 
 from src.infrastructure.parsers.import_dispatcher import dispatch_parse_imports
 
-CACHE_FILE = ".stacker-cache/imports.json"
+CACHE_FILE = ".cortex-cache/imports.json"
 
 
 def build_import_index(

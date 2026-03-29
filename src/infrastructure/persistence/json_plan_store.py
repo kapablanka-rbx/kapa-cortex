@@ -8,7 +8,7 @@ from pathlib import Path
 from src.domain.entity.execution_plan import ExecutionPlan
 from src.domain.repository.plan_repository import PlanRepository
 
-DEFAULT_PLAN_FILE = ".stacked-pr-plan.json"
+DEFAULT_PLAN_FILE = ".cortex-plan.json"
 
 
 class JsonPlanStore(PlanRepository):

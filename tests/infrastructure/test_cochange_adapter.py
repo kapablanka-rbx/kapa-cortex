@@ -37,7 +37,7 @@ class TestCachedCochangeProvider(unittest.TestCase):
 
     def test_loads_from_cache_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            cache_dir = os.path.join(tmpdir, ".stacker-cache")
+            cache_dir = os.path.join(tmpdir, ".cortex-cache")
             os.makedirs(cache_dir)
             cache_file = os.path.join(cache_dir, "cochange.json")
             data = {"src/a.py::src/b.py": 10, "src/a.py::src/c.py": 3}

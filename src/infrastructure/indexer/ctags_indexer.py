@@ -6,13 +6,13 @@ import json
 import subprocess
 from pathlib import Path
 
-TAGS_FILE = ".stacker-cache/tags.json"
+TAGS_FILE = ".cortex-cache/tags.json"
 
 
 def generate_ctags(root: str = ".") -> dict[str, list[dict]]:
     """
     Run universal-ctags on the repo, return {file: [symbols]}.
-    Caches result to .stacker-cache/tags.json.
+    Caches result to .cortex-cache/tags.json.
     """
     cache = Path(root) / TAGS_FILE
     cache.parent.mkdir(parents=True, exist_ok=True)

@@ -24,7 +24,7 @@
 | `--print-commands` | flag | — | Show git commands |
 | `--shell-script` | flag | — | Generate bash script |
 | `--no-gh` | flag | — | Skip GitHub API calls |
-| `--plan-file` | string | .stacked-pr-plan.json | Plan file location |
+| `--plan-file` | string | .cortex-plan.json | Plan file location |
 
 ## File Extraction
 

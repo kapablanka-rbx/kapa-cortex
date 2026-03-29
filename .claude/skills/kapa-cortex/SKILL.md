@@ -32,7 +32,7 @@ Verify the working directory is a git repo with a feature branch.
 
 ```bash
 # Check if caches exist and are fresh
-ls -la .stacker-cache/ 2>/dev/null
+ls -la .cortex-cache/ 2>/dev/null
 
 # If missing or stale, rebuild (takes seconds)
 kapa-cortex --index
@@ -61,7 +61,7 @@ source files. The output includes:
 ### 4. Generate execution plan
 
 ```bash
-kapa-cortex --generate-plan    # creates .stacked-pr-plan.json
+kapa-cortex --generate-plan    # creates .cortex-plan.json
 kapa-cortex --print-commands   # copy-pasteable git commands
 kapa-cortex --shell-script     # executable bash script
 ```
