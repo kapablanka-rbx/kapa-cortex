@@ -105,6 +105,34 @@ kapa-cortex --ai-check           # check backends
 kapa-cortex --no-ai              # disable AI
 ```
 
+## Risk & Complexity Labels
+
+The analysis shows human-readable warnings. Raw scores stay in `--json` output.
+
+### Risk (per PR, 0.0 – 1.0)
+
+Based on: structural code lines (30%), cyclomatic complexity (30%),
+cross-PR dependencies (20%), language diversity (20%).
+
+| Score | Label | What it means |
+|-------|-------|---------------|
+| 0.0 – 0.2 | Low | Small, simple, safe to merge |
+| 0.2 – 0.5 | Moderate | Normal review needed |
+| 0.5 – 0.7 | **High** | Careful review — shows warning with reasons |
+| 0.7 – 1.0 | **Critical** | Split further or get senior review |
+
+### Complexity (per PR, cyclomatic total)
+
+| Score | Label | What it means |
+|-------|-------|---------------|
+| 0 – 5 | Simple | Straightforward code |
+| 5 – 15 | Moderate | Some branching logic |
+| 15 – 30 | **Complex** | Shows warning — consider careful review |
+| 30+ | **Very complex** | Shows warning — consider refactoring |
+
+Warnings only appear for High/Critical risk and Complex/Very complex PRs.
+Low and Moderate PRs show no warnings — clean output.
+
 ## Supported Languages
 
 Python, C, C++, Java, Kotlin, Go, Rust, JavaScript, TypeScript,
