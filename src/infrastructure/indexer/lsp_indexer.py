@@ -34,23 +34,12 @@ class LspQueryResolver:
             self._client = None
             return False
 
-        info = _SERVER_COMMANDS.get(self._language, ("?", []))
-        binary = info[0]
-        print(f"  {CYAN}LSP: starting {binary}...{RESET}", file=sys.stderr)
-
         if not self._client.start():
-            print(f"  {YELLOW}LSP: failed to start {binary}{RESET}", file=sys.stderr)
             self._client = None
             return False
 
-        print(f"  {CYAN}LSP: waiting for background index...{RESET}", file=sys.stderr)
-        if self._client.wait_ready():
-            self._ready = True
-            print(f"  {GREEN}✓{RESET} LSP: {binary} ready", file=sys.stderr)
-            return True
-
-        print(f"  {YELLOW}LSP: index timeout{RESET}", file=sys.stderr)
-        self._ready = True  # use whatever is available
+        self._client.wait_ready()
+        self._ready = True
         return True
 
     def stop(self) -> None:
@@ -73,7 +62,8 @@ class LspQueryResolver:
         if not self._client:
             return []
         root_path = Path(self._root).resolve()
-        locations = self._client.get_references(file_path, line - 1, 0)
+        column = _find_column(file_path, line, symbol_name)
+        locations = self._client.get_references(file_path, line - 1, column)
         results = []
         for loc in locations:
             loc_uri = loc.get("uri", "") if isinstance(loc, dict) else ""
@@ -86,6 +76,16 @@ class LspQueryResolver:
                 continue
             results.append({"file": ref_path, "line": ref_line})
         return results
+
+
+def _find_column(file_path: str, line: int, symbol_name: str) -> int:
+    """Find the column where symbol_name starts on the given line."""
+    try:
+        source_line = Path(file_path).read_text(errors="replace").splitlines()[line - 1]
+        col = source_line.find(symbol_name)
+        return col if col >= 0 else 0
+    except (IndexError, FileNotFoundError):
+        return 0
 
 
 def _uri_to_relative(uri: str, root_path: Path) -> str | None:

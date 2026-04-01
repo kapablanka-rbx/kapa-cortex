@@ -147,31 +147,80 @@ def handle_calls(params: dict, conn: socket.socket) -> dict:
     }
 
 
-def handle_refs(params: dict, conn: socket.socket) -> dict:
-    """Find all references to a symbol via LSP (calls + type refs)."""
+def handle_lookup(params: dict, conn: socket.socket) -> dict:
+    """Find all definitions of a symbol across all scopes."""
     symbol = params.get("target")
     if not symbol:
         raise ValueError("Missing 'target' parameter (symbol name)")
 
-    lsp = _get_lsp_resolver()
-    if not lsp or not lsp.available:
-        raise ValueError("LSP not available — no language server running")
+    store = _get_index_store()
+    results = []
+    for file_path in store.get_files_defining_symbol(symbol):
+        for sym in store.get_symbols_for_file(file_path):
+            if sym.name == symbol:
+                fqn = f"{sym.scope}::{sym.name}" if sym.scope else sym.name
+                results.append({
+                    "fqn": fqn,
+                    "kind": sym.kind,
+                    "file": file_path,
+                    "line": sym.line,
+                })
+
+    return {"symbol": symbol, "definitions": results}
+
+
+def handle_refs(params: dict, conn: socket.socket) -> dict:
+    """Find all references to a symbol via LSP. Takes FQN (Scope::name)."""
+    fqn = params.get("target")
+    if not fqn:
+        raise ValueError("Missing 'target' parameter (FQN like Class::method)")
+
+    # Split FQN into scope + name
+    if "::" in fqn:
+        scope, name = fqn.rsplit("::", 1)
+    else:
+        scope, name = "", fqn
 
     store = _get_index_store()
-    files = store.get_files_defining_symbol(symbol)
-    if not files:
-        raise ValueError(f"Symbol not found in index: {symbol}")
-    target_file, symbol_line = _find_symbol_definition(store, symbol)
+    target_file, symbol_line = _find_scoped_definition(store, name, scope)
+    if not target_file:
+        raise ValueError(f"Symbol not found in index: {fqn}")
 
-    references = lsp.get_references(target_file, symbol, symbol_line)
+    lsp = _wait_for_lsp(conn)
+    if not lsp:
+        raise ValueError("LSP not available — timed out waiting for language server")
+
+    references = lsp.get_references(target_file, name, symbol_line)
 
     return {
         "query": "refs",
-        "symbol": symbol,
+        "fqn": fqn,
         "file": target_file,
+        "line": symbol_line,
         "references": references,
         "total_references": len(references),
     }
+
+
+def _find_scoped_definition(store, symbol_name: str, scope: str) -> tuple[str, int]:
+    """Find a symbol definition filtered by scope. Prefers headers over implementations."""
+    best_file = ""
+    best_line = 0
+    best_in_header = False
+
+    for file_path in store.get_files_defining_symbol(symbol_name):
+        for sym in store.get_symbols_for_file(file_path):
+            if sym.name != symbol_name:
+                continue
+            if sym.scope != scope:
+                continue
+            in_header = file_path.endswith((".h", ".hpp", ".hxx"))
+            if not best_file or (in_header and not best_in_header):
+                best_file = file_path
+                best_line = sym.line
+                best_in_header = in_header
+
+    return best_file, best_line
 
 
 def _classify_references(
@@ -463,6 +512,7 @@ def build_handler_map(server=None) -> dict:
         "deps": handle_deps,
         "hotspots": handle_hotspots,
         "calls": handle_calls,
+        "lookup": handle_lookup,
         "refs": handle_refs,
         "symbol_file_impact": handle_symbol_file_impact,
         "symbol_impact_full": handle_symbol_impact_full,

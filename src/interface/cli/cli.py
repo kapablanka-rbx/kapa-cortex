@@ -111,6 +111,53 @@ def _cmd_reindex(args):
     print(f"  {GREEN}✓{RESET} Reindexed {count} files")
 
 
+def _cmd_lookup(args):
+    """Find all definitions of a symbol across all scopes."""
+    import json as json_mod
+
+    _ensure_daemon()
+    data = _query_or_local("lookup", {"target": args.symbol})
+
+    if args.json:
+        print(json_mod.dumps(data, indent=2))
+        return
+
+    defs = data.get("definitions", [])
+    if not defs:
+        print(f"  {RED}No definitions found for: {args.symbol}{RESET}")
+        sys.exit(1)
+
+    print(f"  {BOLD}{args.symbol}{RESET} ({len(defs)} definitions):")
+    for defn in defs:
+        fqn = defn.get("fqn", args.symbol)
+        kind = defn.get("kind", "")
+        file_path = defn.get("file", "")
+        line = defn.get("line", 0)
+        print(f"    {fqn}  {DIM}{kind}  {file_path}:{line}{RESET}")
+
+
+def _cmd_refs(args):
+    """Find all references to a symbol via LSP."""
+    import json as json_mod
+
+    _ensure_daemon()
+    data = _query_or_local("refs", {"target": args.fqn})
+
+    if args.json:
+        print(json_mod.dumps(data, indent=2))
+        return
+
+    refs = data.get("references", [])
+    fqn = data.get("fqn", args.fqn)
+    source_file = data.get("file", "")
+    source_line = data.get("line", 0)
+
+    print(f"  {BOLD}{fqn}{RESET}  {DIM}defined at {source_file}:{source_line}{RESET}")
+    print(f"  {len(refs)} references:")
+    for ref in refs:
+        print(f"    {ref['file']}:{ref['line']}")
+
+
 def _query_or_local(action: str, params: dict) -> dict:
     """Route query through daemon (starting it if needed), or run locally with --no-daemon."""
     from src.interface.daemon.client import send_query
@@ -510,6 +557,18 @@ def _parse_args():
     impact_parser.add_argument("--refs", action="store_true", help="Show only type/reference usage")
     impact_parser.add_argument("--json", action="store_true", help="JSON output")
     impact_parser.set_defaults(func=_cmd_impact)
+
+    # ── lookup ──
+    lookup_parser = subparsers.add_parser("lookup", help="Find all definitions of a symbol")
+    lookup_parser.add_argument("symbol", help="Symbol name to look up")
+    lookup_parser.add_argument("--json", action="store_true", help="JSON output")
+    lookup_parser.set_defaults(func=_cmd_lookup)
+
+    # ── refs ──
+    refs_parser = subparsers.add_parser("refs", help="Find all references to a symbol (LSP)")
+    refs_parser.add_argument("fqn", help="Fully qualified name (e.g. Class::method)")
+    refs_parser.add_argument("--json", action="store_true", help="JSON output")
+    refs_parser.set_defaults(func=_cmd_refs)
 
     # ── hotspots ──
     hotspots_parser = subparsers.add_parser("hotspots", help="Rank files by complexity × dependents")
