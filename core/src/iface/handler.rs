@@ -1,6 +1,8 @@
 use rusqlite::{Connection, params};
 use std::os::unix::net::UnixStream;
 use crate::infrastructure::sqlite::{self, Database};
+use crate::infrastructure::lsp;
+use crate::iface::server::DaemonState;
 use super::protocol::{read_request, write_response, Response};
 
 pub fn handle_connection(
@@ -8,7 +10,18 @@ pub fn handle_connection(
     db: &Database,
 ) -> std::io::Result<()> {
     let request = read_request(&mut stream)?;
-    let response = db.with_conn(|conn| dispatch(&request.action, &request.params, conn));
+    let response = db.with_conn(|conn| dispatch(&request.action, &request.params, conn, None));
+    write_response(&mut stream, &response)
+}
+
+pub fn handle_connection_v2(
+    mut stream: UnixStream,
+    state: &DaemonState,
+) -> std::io::Result<()> {
+    let request = read_request(&mut stream)?;
+    let response = state.db.with_conn(|conn| {
+        dispatch(&request.action, &request.params, conn, Some(&state.lsp))
+    });
     write_response(&mut stream, &response)
 }
 
@@ -16,6 +29,7 @@ fn dispatch(
     action: &str,
     params: &serde_json::Value,
     conn: &Connection,
+    lsp_lock: Option<&std::sync::Mutex<Option<lsp::LspClient>>>,
 ) -> Response {
     let result = match action {
         "lookup" => handle_lookup(params, conn),
@@ -26,6 +40,7 @@ fn dispatch(
         "deps" => handle_deps(params, conn),
         "hotspots" => handle_hotspots(params, conn),
         "calls" => handle_calls(params, conn),
+        "refs" => handle_refs(params, conn, lsp_lock),
         "status" => handle_status(conn),
         _ => Err(format!("Unknown action: {}", action)),
     };
@@ -233,6 +248,51 @@ fn handle_calls(
         "callers": callers,
         "affected_files": affected_files,
         "total_affected": affected_files.len(),
+    }))
+}
+
+fn handle_refs(
+    params: &serde_json::Value,
+    conn: &Connection,
+    lsp_lock: Option<&std::sync::Mutex<Option<lsp::LspClient>>>,
+) -> Result<serde_json::Value, String> {
+    let fqn = get_target(params)?;
+    let (scope, name) = split_fqn(fqn);
+
+    let (file, line) = sqlite::find_scoped_definition(conn, name, scope)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Symbol not found: {}", fqn))?;
+
+    let lsp_client = lsp_lock
+        .ok_or_else(|| "LSP not available".to_string())?
+        .lock()
+        .map_err(|e| e.to_string())?;
+
+    let client = lsp_client
+        .as_ref()
+        .ok_or_else(|| "LSP not started".to_string())?;
+
+    let column = lsp::find_column(&file, line as usize, name) as i64;
+    let raw_refs = client.get_references(&file, line - 1, column);
+
+    let references: Vec<serde_json::Value> = raw_refs
+        .iter()
+        .filter_map(|loc| {
+            let uri = loc.get("uri")?.as_str()?;
+            let range = loc.get("range")?;
+            let ref_line = range.get("start")?.get("line")?.as_i64()? + 1;
+            let ref_path = uri.strip_prefix("file://")?;
+            Some(serde_json::json!({"file": ref_path, "line": ref_line}))
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "query": "refs",
+        "fqn": fqn,
+        "file": file,
+        "line": line,
+        "references": references,
+        "total_references": references.len(),
     }))
 }
 

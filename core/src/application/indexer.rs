@@ -100,11 +100,45 @@ pub fn index_repo(db: &Database, root: &str) -> Result<(), String> {
         edge_count,
         edge_start.elapsed().as_secs_f32()
     );
+    // Complexity via lizard
+    let cx_start = Instant::now();
+    let cx_count = compute_complexity(db, &files, &root_prefix)?;
+    eprintln!(
+        "  \x1b[32m✓\x1b[0m {} files with complexity ({:.1}s)",
+        cx_count,
+        cx_start.elapsed().as_secs_f32()
+    );
+
     eprintln!(
         "  \x1b[32m✓\x1b[0m Index complete in {:.1}s",
         start.elapsed().as_secs_f32()
     );
     Ok(())
+}
+
+fn compute_complexity(db: &Database, files: &[String], root_prefix: &str) -> Result<usize, String> {
+    use crate::infrastructure::complexity;
+
+    // Run lizard on all files at once for speed
+    let results = complexity::analyze_complexity(files);
+    let mut count = 0;
+
+    db.with_conn(|conn| -> Result<(), String> {
+        conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+        for fc in &results {
+            let relative = fc.path
+                .strip_prefix(root_prefix)
+                .unwrap_or(&fc.path);
+            conn.execute(
+                "UPDATE files SET complexity = ?, lines = ? WHERE path = ?",
+                params![fc.complexity, fc.lines, relative],
+            ).map_err(|e| e.to_string())?;
+            count += 1;
+        }
+        conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+        Ok(())
+    })?;
+    Ok(count)
 }
 
 fn detect_language(file_path: &str) -> Option<&str> {
