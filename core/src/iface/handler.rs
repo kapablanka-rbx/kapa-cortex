@@ -1,6 +1,6 @@
 use rusqlite::{Connection, params};
 use std::os::unix::net::UnixStream;
-use crate::db::{Database, queries};
+use crate::infrastructure::sqlite::{self, Database};
 use super::protocol::{read_request, write_response, Response};
 
 pub fn handle_connection(
@@ -48,7 +48,7 @@ fn handle_lookup(
     conn: &Connection,
 ) -> Result<serde_json::Value, String> {
     let symbol = get_target(params)?;
-    let defs = queries::lookup(conn, symbol).map_err(|e| e.to_string())?;
+    let defs = sqlite::lookup(conn, symbol).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
         "query": "lookup",
         "symbol": symbol,
@@ -61,7 +61,7 @@ fn handle_symbols(
     conn: &Connection,
 ) -> Result<serde_json::Value, String> {
     let file_path = get_target(params)?;
-    let symbols = queries::symbols_for_file(conn, file_path).map_err(|e| e.to_string())?;
+    let symbols = sqlite::symbols_for_file(conn, file_path).map_err(|e| e.to_string())?;
     let total = symbols.len();
     Ok(serde_json::json!({
         "query": "symbols",
@@ -78,14 +78,14 @@ fn handle_explain(
     let fqn = get_target(params)?;
     let (scope, name) = split_fqn(fqn);
 
-    let (file, line) = queries::find_scoped_definition(conn, name, scope)
+    let (file, line) = sqlite::find_scoped_definition(conn, name, scope)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Symbol not found: {}", fqn))?;
 
-    let callers = queries::get_callers(conn, name, &file).map_err(|e| e.to_string())?;
-    let callees = queries::get_callees(conn, name, &file).map_err(|e| e.to_string())?;
+    let callers = sqlite::get_callers(conn, name, &file).map_err(|e| e.to_string())?;
+    let callees = sqlite::get_callees(conn, name, &file).map_err(|e| e.to_string())?;
 
-    let all_defs = queries::lookup(conn, name).map_err(|e| e.to_string())?;
+    let all_defs = sqlite::lookup(conn, name).map_err(|e| e.to_string())?;
     let overrides: Vec<_> = all_defs
         .into_iter()
         .filter(|d| {
@@ -124,15 +124,15 @@ fn handle_trace(
     let (src_scope, src_name) = split_fqn(source_fqn);
     let (tgt_scope, tgt_name) = split_fqn(target_fqn);
 
-    let (src_file, _) = queries::find_scoped_definition(conn, src_name, src_scope)
+    let (src_file, _) = sqlite::find_scoped_definition(conn, src_name, src_scope)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Source not found: {}", source_fqn))?;
 
-    let (tgt_file, _) = queries::find_scoped_definition(conn, tgt_name, tgt_scope)
+    let (tgt_file, _) = sqlite::find_scoped_definition(conn, tgt_name, tgt_scope)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Target not found: {}", target_fqn))?;
 
-    let path = queries::trace_path(conn, src_name, &src_file, tgt_name, &tgt_file)
+    let path = sqlite::trace_path(conn, src_name, &src_file, tgt_name, &tgt_file)
         .map_err(|e| e.to_string())?;
 
     let hops = path.len();
@@ -158,22 +158,22 @@ fn handle_impact(
         > 0;
 
     if file_exists {
-        let (direct, transitive) = queries::find_impact(conn, target, 10).map_err(|e| e.to_string())?;
+        let result = sqlite::find_impact(conn, target, 10).map_err(|e| e.to_string())?;
         Ok(serde_json::json!({
             "query": "impact",
             "target": target,
-            "direct": direct,
-            "transitive": transitive,
-            "total_affected": direct.len() + transitive.len(),
+            "direct": result.direct,
+            "transitive": result.transitive,
+            "total_affected": result.total_affected(),
         }))
     } else {
         // Symbol — find its file, then do call impact
         let (scope, name) = split_fqn(target);
-        let (file, _line) = queries::find_scoped_definition(conn, name, scope)
+        let (file, _line) = sqlite::find_scoped_definition(conn, name, scope)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Not found: {}", target))?;
 
-        let callers = queries::find_call_impact(conn, name, &file, 10).map_err(|e| e.to_string())?;
+        let callers = sqlite::find_call_impact(conn, name, &file, 10).map_err(|e| e.to_string())?;
         let affected_files: Vec<String> = callers.iter().map(|c| c.file.clone()).collect::<std::collections::HashSet<_>>().into_iter().collect();
         Ok(serde_json::json!({
             "query": "symbol_impact",
@@ -191,7 +191,7 @@ fn handle_deps(
     conn: &Connection,
 ) -> Result<serde_json::Value, String> {
     let target = get_target(params)?;
-    let deps = queries::find_deps(conn, target, 10).map_err(|e| e.to_string())?;
+    let deps = sqlite::find_deps(conn, target, 10).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
         "query": "deps",
         "target": target,
@@ -205,7 +205,7 @@ fn handle_hotspots(
     conn: &Connection,
 ) -> Result<serde_json::Value, String> {
     let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
-    let hotspots = queries::find_hotspots(conn, limit).map_err(|e| e.to_string())?;
+    let hotspots = sqlite::find_hotspots(conn, limit).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
         "query": "hotspots",
         "hotspots": hotspots,
@@ -219,11 +219,11 @@ fn handle_calls(
     let fqn = get_target(params)?;
     let (scope, name) = split_fqn(fqn);
 
-    let (file, _line) = queries::find_scoped_definition(conn, name, scope)
+    let (file, _line) = sqlite::find_scoped_definition(conn, name, scope)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Symbol not found: {}", fqn))?;
 
-    let callers = queries::find_call_impact(conn, name, &file, 10).map_err(|e| e.to_string())?;
+    let callers = sqlite::find_call_impact(conn, name, &file, 10).map_err(|e| e.to_string())?;
     let affected_files: Vec<String> = callers.iter().map(|c| c.file.clone()).collect::<std::collections::HashSet<_>>().into_iter().collect();
 
     Ok(serde_json::json!({
@@ -237,10 +237,10 @@ fn handle_calls(
 }
 
 fn handle_status(conn: &Connection) -> Result<serde_json::Value, String> {
-    let files = queries::file_count(conn).map_err(|e| e.to_string())?;
-    let symbols = queries::symbol_count(conn).map_err(|e| e.to_string())?;
-    let edges = queries::edge_count(conn).map_err(|e| e.to_string())?;
-    let calls = queries::call_count(conn).map_err(|e| e.to_string())?;
+    let files = sqlite::file_count(conn).map_err(|e| e.to_string())?;
+    let symbols = sqlite::symbol_count(conn).map_err(|e| e.to_string())?;
+    let edges = sqlite::edge_count(conn).map_err(|e| e.to_string())?;
+    let calls = sqlite::call_count(conn).map_err(|e| e.to_string())?;
 
     Ok(serde_json::json!({
         "running": true,

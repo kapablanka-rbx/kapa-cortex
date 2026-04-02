@@ -1,10 +1,8 @@
-pub mod protocol;
-pub mod handler;
-
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::Arc;
-use crate::db::Database;
+use crate::infrastructure::sqlite::Database;
+use super::handler;
 
 pub const SOCKET_PATH: &str = "/tmp/kapa-cortex.sock";
 
