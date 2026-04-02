@@ -1,194 +1,143 @@
 pub mod hasher;
+pub mod walker;
+pub mod ctags;
+pub mod imports;
 
 use crate::db::Database;
 use rusqlite::params;
-use serde::{Deserialize, Serialize};
-use std::process::Command;
+use std::time::Instant;
 
-#[derive(Debug, Deserialize)]
-struct ParseResult {
-    symbols: Vec<ParsedSymbol>,
-    imports: Vec<ParsedImport>,
-    calls: Vec<ParsedCall>,
+/// Full index: walk repo, parse each file, build edges.
+pub fn index_repo(db: &Database, root: &str) -> Result<(), String> {
+    let start = Instant::now();
+    let files = walker::find_source_files(root)?;
+    let total = files.len();
+    eprintln!("  \x1b[36mIndexing {} files...\x1b[0m", total);
+
+    let root_prefix = format!("{}/", std::fs::canonicalize(root).map_err(|e| e.to_string())?.display());
+
+    db.with_conn(|conn| -> Result<(), String> {
+        conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+
+        let mut symbol_count: usize = 0;
+        let mut import_count: usize = 0;
+
+        for (idx, file_path) in files.iter().enumerate() {
+            // Progress every 100 files
+            if idx % 100 == 0 && idx > 0 {
+                let elapsed = start.elapsed().as_secs();
+                let pct = idx * 100 / total;
+                eprint!("\r\x1b[2K  \x1b[36m{}/{} ({}%) {}s\x1b[0m", idx, total, pct, elapsed);
+            }
+
+            // Make path relative
+            let abs = std::fs::canonicalize(file_path)
+                .unwrap_or_else(|_| std::path::PathBuf::from(file_path));
+            let relative = abs.to_string_lossy()
+                .strip_prefix(&root_prefix)
+                .unwrap_or(&abs.to_string_lossy())
+                .to_string();
+
+            // Content hash
+            let hash = hasher::hash_file(file_path)?;
+
+            // Register file
+            conn.execute(
+                "INSERT OR REPLACE INTO files (path, content_hash) VALUES (?, ?)",
+                params![relative, hash],
+            ).map_err(|e| e.to_string())?;
+
+            // Symbols from ctags
+            let symbols = ctags::parse_file(file_path)?;
+            for sym in &symbols {
+                conn.execute(
+                    "INSERT INTO symbols (file_path, name, kind, line, scope) VALUES (?, ?, ?, ?, ?)",
+                    params![relative, sym.name, sym.kind, sym.line, sym.scope],
+                ).map_err(|e| e.to_string())?;
+                symbol_count += 1;
+            }
+
+            // Imports
+            let file_imports = imports::parse_includes(file_path)?;
+            for imp in &file_imports {
+                conn.execute(
+                    "INSERT INTO imports (file_path, raw, module, kind) VALUES (?, ?, ?, ?)",
+                    params![relative, imp.raw, imp.module, imp.kind],
+                ).map_err(|e| e.to_string())?;
+                import_count += 1;
+            }
+        }
+
+        conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+
+        let elapsed = start.elapsed().as_secs_f32();
+        eprintln!("\r\x1b[2K  \x1b[32m✓\x1b[0m {} symbols, {} imports ({:.1}s)", symbol_count, import_count, elapsed);
+
+        Ok(())
+    })?;
+
+    // Build edges from imports
+    let edge_start = Instant::now();
+    let edge_count = build_edges(db)?;
+    let edge_elapsed = edge_start.elapsed().as_secs_f32();
+    eprintln!("  \x1b[32m✓\x1b[0m {} edges ({:.1}s)", edge_count, edge_elapsed);
+
+    let total_elapsed = start.elapsed().as_secs_f32();
+    eprintln!("  \x1b[32m✓\x1b[0m Index complete in {:.1}s", total_elapsed);
+
+    Ok(())
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct ParsedSymbol {
-    name: String,
-    kind: String,
-    line: i64,
-    scope: String,
-}
+fn build_edges(db: &Database) -> Result<usize, String> {
+    db.with_conn(|conn| -> Result<usize, String> {
+        // Build file lookup: basename → [paths]
+        let mut file_index: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        let mut stmt = conn.prepare("SELECT path FROM files").map_err(|e| e.to_string())?;
+        let paths: Vec<String> = stmt.query_map([], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
 
-#[derive(Debug, Deserialize, Serialize)]
-struct ParsedImport {
-    raw: String,
-    module: String,
-    kind: String,
-}
+        for path in &paths {
+            if let Some(basename) = std::path::Path::new(path).file_name() {
+                file_index.entry(basename.to_string_lossy().to_string())
+                    .or_default()
+                    .push(path.clone());
+            }
+        }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct ParsedCall {
-    caller_function: String,
-    callee_function: String,
-    line: i64,
-}
+        // Resolve imports to edges
+        let mut import_stmt = conn.prepare("SELECT file_path, module FROM imports")
+            .map_err(|e| e.to_string())?;
+        let import_rows: Vec<(String, String)> = import_stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        }).map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
 
-/// Index a single file. Checks content hash cache first.
-pub fn index_file(db: &Database, file_path: &str) -> Result<(), String> {
-    let content_hash = hasher::hash_file(file_path)?;
+        conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
 
-    db.with_conn(|conn| {
-        index_file_with_conn(conn, file_path, &content_hash)
+        let mut edge_count = 0;
+        for (source, module) in &import_rows {
+            let basename = std::path::Path::new(module)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            if let Some(targets) = file_index.get(&basename) {
+                for target in targets {
+                    if target != source {
+                        conn.execute(
+                            "INSERT OR IGNORE INTO edges (source, target, kind) VALUES (?, ?, 'import')",
+                            params![source, target],
+                        ).map_err(|e| e.to_string())?;
+                        edge_count += 1;
+                    }
+                }
+            }
+        }
+
+        conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+        Ok(edge_count)
     })
-}
-
-fn index_file_with_conn(
-    conn: &rusqlite::Connection,
-    file_path: &str,
-    content_hash: &str,
-) -> Result<(), String> {
-    // Check entry cache
-    let cached = crate::db::queries::get_cached_entry(conn, content_hash)
-        .map_err(|e| e.to_string())?;
-
-    if cached {
-        update_file_mapping(conn, file_path, content_hash)?;
-        restore_from_cache(conn, file_path, content_hash)?;
-        return Ok(());
-    }
-
-    // Cache miss — call Python parser
-    let parse_result = call_python_parser(file_path)?;
-
-    // Store in database
-    conn.execute("DELETE FROM symbols WHERE file_path = ?", params![file_path])
-        .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM imports WHERE file_path = ?", params![file_path])
-        .map_err(|e| e.to_string())?;
-    conn.execute(
-        "DELETE FROM calls WHERE caller_file = ?",
-        params![file_path],
-    )
-    .map_err(|e| e.to_string())?;
-
-    for sym in &parse_result.symbols {
-        conn.execute(
-            "INSERT INTO symbols (file_path, name, kind, line, scope) VALUES (?, ?, ?, ?, ?)",
-            params![file_path, sym.name, sym.kind, sym.line, sym.scope],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-
-    for imp in &parse_result.imports {
-        conn.execute(
-            "INSERT INTO imports (file_path, raw, module, kind) VALUES (?, ?, ?, ?)",
-            params![file_path, imp.raw, imp.module, imp.kind],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-
-    for call in &parse_result.calls {
-        conn.execute(
-            "INSERT INTO calls (caller_file, caller_function, callee_file, callee_function, line)
-             VALUES (?, ?, '', ?, ?)",
-            params![file_path, call.caller_function, call.callee_function, call.line],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-
-    // Store in entry cache
-    let symbols_blob = rmp_serde::to_vec(&parse_result.symbols).map_err(|e| e.to_string())?;
-    let imports_blob = rmp_serde::to_vec(&parse_result.imports).map_err(|e| e.to_string())?;
-    let calls_blob = rmp_serde::to_vec(&parse_result.calls).map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT OR REPLACE INTO entry_cache (content_hash, symbols, imports, calls) VALUES (?, ?, ?, ?)",
-        params![content_hash, symbols_blob, imports_blob, calls_blob],
-    )
-    .map_err(|e| e.to_string())?;
-
-    update_file_mapping(conn, file_path, content_hash)?;
-
-    Ok(())
-}
-
-fn update_file_mapping(conn: &rusqlite::Connection, file_path: &str, content_hash: &str) -> Result<(), String> {
-    conn
-        .execute(
-            "INSERT OR REPLACE INTO files (path, content_hash) VALUES (?, ?)",
-            params![file_path, content_hash],
-        )
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-fn restore_from_cache(conn: &rusqlite::Connection, file_path: &str, content_hash: &str) -> Result<(), String> {
-    // Clear old data for this file
-    conn.execute("DELETE FROM symbols WHERE file_path = ?", params![file_path])
-        .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM imports WHERE file_path = ?", params![file_path])
-        .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM calls WHERE caller_file = ?", params![file_path])
-        .map_err(|e| e.to_string())?;
-
-    // Load from cache
-    let (symbols_blob, imports_blob, calls_blob): (Vec<u8>, Vec<u8>, Vec<u8>) = conn
-        .query_row(
-            "SELECT symbols, imports, calls FROM entry_cache WHERE content_hash = ?",
-            params![content_hash],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .map_err(|e| e.to_string())?;
-
-    let symbols: Vec<ParsedSymbol> =
-        rmp_serde::from_slice(&symbols_blob).map_err(|e| e.to_string())?;
-    let imports: Vec<ParsedImport> =
-        rmp_serde::from_slice(&imports_blob).map_err(|e| e.to_string())?;
-    let calls: Vec<ParsedCall> =
-        rmp_serde::from_slice(&calls_blob).map_err(|e| e.to_string())?;
-
-    for sym in &symbols {
-        conn.execute(
-            "INSERT INTO symbols (file_path, name, kind, line, scope) VALUES (?, ?, ?, ?, ?)",
-            params![file_path, sym.name, sym.kind, sym.line, sym.scope],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-
-    for imp in &imports {
-        conn.execute(
-            "INSERT INTO imports (file_path, raw, module, kind) VALUES (?, ?, ?, ?)",
-            params![file_path, imp.raw, imp.module, imp.kind],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-
-    for call in &calls {
-        conn.execute(
-            "INSERT INTO calls (caller_file, caller_function, callee_file, callee_function, line)
-             VALUES (?, ?, '', ?, ?)",
-            params![file_path, call.caller_function, call.callee_function, call.line],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-
-    Ok(())
-}
-
-fn call_python_parser(file_path: &str) -> Result<ParseResult, String> {
-    let output = Command::new("python3")
-        .args(["-m", "kapa_cortex.parse", file_path])
-        .output()
-        .map_err(|e| format!("Failed to run parser: {}", e))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "Parser failed for {}: {}",
-            file_path,
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("Failed to parse output for {}: {}", file_path, e))
 }

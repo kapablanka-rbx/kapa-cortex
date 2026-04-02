@@ -12,7 +12,7 @@ fn main() {
 
     if args.len() < 2 {
         eprintln!("Usage: kapa-cortex-core <command>");
-        eprintln!("Commands: start, stop, status");
+        eprintln!("Commands: start, stop, status, index [root]");
         std::process::exit(1);
     }
 
@@ -20,6 +20,10 @@ fn main() {
         "start" => start_daemon(),
         "stop" => stop_daemon(),
         "status" => check_status(),
+        "index" => {
+            let root = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            run_index(root);
+        }
         _ => {
             eprintln!("Unknown command: {}", args[1]);
             std::process::exit(1);
@@ -91,6 +95,43 @@ fn stop_daemon() {
     let mut response = Vec::new();
     stream.read_to_end(&mut response).ok();
     eprintln!("  \x1b[32mDaemon stopped.\x1b[0m");
+}
+
+fn run_index(root: &str) {
+    let db_path = PathBuf::from(format!("{}/.cortex-cache/index.db", root));
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+
+    let db = db::Database::open(&db_path).unwrap_or_else(|e| {
+        eprintln!("  \x1b[31mFailed to open database: {}\x1b[0m", e);
+        std::process::exit(1);
+    });
+
+    // Clear old data
+    db.with_conn(|conn| {
+        conn.execute_batch(
+            "DELETE FROM files; DELETE FROM symbols; DELETE FROM imports; DELETE FROM edges; DELETE FROM calls;"
+        ).ok();
+    });
+
+    if let Err(e) = index::index_repo(&db, root) {
+        eprintln!("  \x1b[31mIndex error: {}\x1b[0m", e);
+        std::process::exit(1);
+    }
+
+    db.with_conn(|conn| {
+        if let (Ok(files), Ok(symbols), Ok(edges)) = (
+            db::queries::file_count(conn),
+            db::queries::symbol_count(conn),
+            db::queries::edge_count(conn),
+        ) {
+            eprintln!(
+                "  \x1b[32m✓\x1b[0m Index complete: {} files, {} symbols, {} edges",
+                files, symbols, edges
+            );
+        }
+    });
 }
 
 fn check_status() {
