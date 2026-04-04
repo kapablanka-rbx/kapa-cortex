@@ -357,9 +357,12 @@ fn print_briefing(action: &str, data: &serde_json::Value) {
         }
         "lookup" => {
             if let Some(defs) = ja(data, "definitions") {
-                for d in defs {
-                    println!("{} {} {}:{}", js(d, "fqn"), js(d, "kind"), js(d, "file"), jn(d, "line"));
+                let cap = 20;
+                println!("definitions: {}", defs.len());
+                for d in defs.iter().take(cap) {
+                    println!("  {} {} {}:{}", js(d, "fqn"), js(d, "kind"), js(d, "file"), jn(d, "line"));
                 }
+                if defs.len() > cap { println!("  +{} more", defs.len() - cap); }
             }
         }
         "refs" => {

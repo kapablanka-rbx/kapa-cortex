@@ -105,12 +105,17 @@ pub fn lookup(conn: &Connection, symbol: &str) -> rusqlite::Result<Vec<SymbolDef
 pub fn find_scoped_definition(
     conn: &Connection, name: &str, scope: &str,
 ) -> rusqlite::Result<Option<(String, i64)>> {
-    let mut stmt = conn.prepare(
-        "SELECT file_path, line FROM symbols WHERE name = ? AND scope = ?",
-    )?;
-    let rows: Vec<(String, i64)> = stmt
-        .query_map(params![name, scope], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<Result<Vec<_>, _>>()?;
+    let rows: Vec<(String, i64)> = if scope.is_empty() {
+        conn.prepare(
+            "SELECT file_path, line FROM symbols WHERE name = ? AND kind IN ('function', 'method', 'prototype', 'class', 'struct')",
+        )?.query_map(params![name], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        conn.prepare(
+            "SELECT file_path, line FROM symbols WHERE name = ? AND scope = ?",
+        )?.query_map(params![name, scope], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
     let header = rows.iter().find(|(f, _)| f.ends_with(".h") || f.ends_with(".hpp"));
     if let Some(result) = header {
         return Ok(Some(result.clone()));
