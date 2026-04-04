@@ -145,6 +145,12 @@ pub enum Command {
         #[arg(long)]
         brief: bool,
     },
+    /// Buck2 build system queries
+    #[command(name = "buck2")]
+    Buck2 {
+        #[command(subcommand)]
+        action: Buck2Action,
+    },
     /// Check status
     Status,
     /// Re-index specific files
@@ -154,6 +160,43 @@ pub enum Command {
     },
     /// Install Claude Code skill
     InstallSkill,
+}
+
+#[derive(Subcommand)]
+pub enum Buck2Action {
+    /// List all targets
+    Targets {
+        /// Filter by rule type (e.g. rust_library)
+        #[arg(long)]
+        rule: Option<String>,
+        /// Briefing output
+        #[arg(long)]
+        brief: bool,
+    },
+    /// Find which target owns a source file
+    Owner {
+        /// Source file path
+        file: String,
+        /// Briefing output
+        #[arg(long)]
+        brief: bool,
+    },
+    /// Target dependencies
+    Deps {
+        /// Target label (e.g. //app/buck2_core:buck2_core)
+        label: String,
+        /// Briefing output
+        #[arg(long)]
+        brief: bool,
+    },
+    /// Reverse target dependencies
+    Rdeps {
+        /// Target label
+        label: String,
+        /// Briefing output
+        #[arg(long)]
+        brief: bool,
+    },
 }
 
 #[derive(Subcommand)]

@@ -4,7 +4,7 @@ mod infrastructure;
 mod iface;
 
 use clap::Parser;
-use iface::cli::{Cli, Command, DaemonAction, OutputMode, parse_output_mode};
+use iface::cli::{Cli, Command, DaemonAction, Buck2Action, OutputMode, parse_output_mode};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -59,6 +59,7 @@ fn main() {
                 }
             }
         }
+        Command::Buck2 { action } => run_buck2(action),
         Command::InstallSkill => install_skill(),
     }
 }
@@ -452,6 +453,87 @@ fn print_briefing(action: &str, data: &serde_json::Value) {
         }
         _ => { println!("{}", serde_json::to_string_pretty(data).unwrap_or_default()); }
     }
+}
+
+fn run_buck2(action: Buck2Action) {
+    let db = open_db();
+    db.with_conn(|conn| {
+        match action {
+            Buck2Action::Targets { rule, brief } => {
+                let query = if let Some(ref r) = rule {
+                    format!("SELECT path, name, rule FROM targets WHERE rule = '{}' ORDER BY path, name", r)
+                } else {
+                    "SELECT path, name, rule FROM targets ORDER BY path, name".to_string()
+                };
+                let mut stmt = conn.prepare(&query).unwrap();
+                let rows: Vec<(String, String, String)> = stmt
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+
+                if brief {
+                    println!("targets: {}", rows.len());
+                    for (path, name, rule) in &rows {
+                        let pkg = infrastructure::buck2::package_from_targets_path(path);
+                        println!("  //{}:{} {}", pkg, name, rule);
+                    }
+                } else {
+                    println!("  \x1b[1m{} targets\x1b[0m\n", rows.len());
+                    for (path, name, rule) in &rows {
+                        let pkg = infrastructure::buck2::package_from_targets_path(path);
+                        println!("  //{}:{:<40} {}", pkg, name, rule);
+                    }
+                }
+            }
+            Buck2Action::Owner { file, brief } => {
+                let results = infrastructure::sqlite::find_target_for_file(conn, &file).unwrap();
+                if brief {
+                    if results.is_empty() {
+                        println!("owner: none found for {}", file);
+                    } else {
+                        println!("file: {}", file);
+                        for t in &results {
+                            let pkg = infrastructure::buck2::package_from_targets_path(&t.path);
+                            println!("  //{}:{} {}", pkg, t.name, t.rule);
+                        }
+                    }
+                } else {
+                    if results.is_empty() {
+                        println!("  No target found owning {}", file);
+                    } else {
+                        println!("  \x1b[1mOwners of {}\x1b[0m\n", file);
+                        for t in &results {
+                            let pkg = infrastructure::buck2::package_from_targets_path(&t.path);
+                            println!("  //{}:{}  ({})", pkg, t.name, t.rule);
+                        }
+                    }
+                }
+            }
+            Buck2Action::Deps { label, brief } => {
+                let deps = infrastructure::sqlite::target_deps(conn, &label).unwrap();
+                if brief {
+                    println!("target: {}", label);
+                    println!("deps: {}", deps.len());
+                    for d in &deps { println!("  {}", d); }
+                } else {
+                    println!("  \x1b[1mDeps of {}\x1b[0m ({})\n", label, deps.len());
+                    for d in &deps { println!("  {}", d); }
+                }
+            }
+            Buck2Action::Rdeps { label, brief } => {
+                let rdeps = infrastructure::sqlite::target_rdeps(conn, &label).unwrap();
+                if brief {
+                    println!("target: {}", label);
+                    println!("rdeps: {}", rdeps.len());
+                    for r in &rdeps { println!("  {}", r); }
+                } else {
+                    println!("  \x1b[1mReverse deps of {}\x1b[0m ({})\n", label, rdeps.len());
+                    for r in &rdeps { println!("  {}", r); }
+                }
+            }
+        }
+    });
 }
 
 fn stop_daemon() {
