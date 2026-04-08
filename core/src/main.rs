@@ -59,7 +59,55 @@ fn main() {
                 }
             }
         }
+        Command::Extract { description, base, branch, json, brief } => {
+            let mode = parse_output_mode(json, brief);
+            let base = base.unwrap_or_else(|| infrastructure::git::detect_base().unwrap_or("main".to_string()));
+            match application::extract::extract_files(&base, &description) {
+                Ok(result) => {
+                    // Create branch if requested
+                    if let Some(ref branch_name) = branch {
+                        if result.matched_files.is_empty() {
+                            eprintln!("  \x1b[33mNo files matched — branch not created\x1b[0m");
+                        } else {
+                            match application::extract::create_extraction_branch(&base, branch_name, &result.matched_files) {
+                                Ok(()) => eprintln!("  \x1b[32m✓\x1b[0m Branch '{}' created with {} files", branch_name, result.matched_files.len()),
+                                Err(e) => {
+                                    eprintln!("  \x1b[31mBranch creation failed: {}\x1b[0m", e);
+                                    std::process::exit(1);
+                                }
+                            }
+                        }
+                    }
+                    match mode {
+                        OutputMode::Json => println!("{}", serde_json::json!({
+                            "description": result.description,
+                            "matched": result.matched_files,
+                            "unmatched": result.unmatched_files,
+                            "total_matched": result.matched_files.len(),
+                        })),
+                        OutputMode::Briefing => {
+                            println!("matched: {}", result.matched_files.len());
+                            for f in &result.matched_files { println!("  {}", f); }
+                        }
+                        OutputMode::Text => {
+                            println!("  \x1b[1mExtract:\x1b[0m {}\n", result.description);
+                            println!("  \x1b[32mMatched ({}):\x1b[0m", result.matched_files.len());
+                            for f in &result.matched_files { println!("    {}", f); }
+                            if !result.unmatched_files.is_empty() {
+                                println!("\n  \x1b[33mNot matched ({}):\x1b[0m", result.unmatched_files.len());
+                                for f in &result.unmatched_files { println!("    {}", f); }
+                            }
+                        }
+                    }
+                },
+                Err(e) => {
+                    eprintln!("  \x1b[31m{}\x1b[0m", e);
+                    std::process::exit(1);
+                }
+            }
+        }
         Command::Buck2 { action } => run_buck2(action),
+        Command::Mcp => iface::mcp::run(),
         Command::InstallSkill => install_skill(),
     }
 }
@@ -304,10 +352,15 @@ fn print_result(action: &str, data: &serde_json::Value) {
             let total = data.get("total_references").and_then(|n| n.as_i64()).unwrap_or(0);
             println!("  \x1b[1m{}\x1b[0m ({} references):", fqn, total);
             if let Some(refs) = data.get("references").and_then(|r| r.as_array()) {
+                let mut by_file: std::collections::BTreeMap<String, Vec<i64>> = std::collections::BTreeMap::new();
                 for r in refs {
-                    let file = r.get("file").and_then(|s| s.as_str()).unwrap_or("");
+                    let file = r.get("file").and_then(|s| s.as_str()).unwrap_or("").to_string();
                     let line = r.get("line").and_then(|l| l.as_i64()).unwrap_or(0);
-                    println!("    {}:{}", file, line);
+                    by_file.entry(file).or_default().push(line);
+                }
+                for (file, lines) in &by_file {
+                    let line_str: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+                    println!("    {} :{}", file, line_str.join(","));
                 }
             }
         }
@@ -370,7 +423,15 @@ fn print_briefing(action: &str, data: &serde_json::Value) {
             println!("symbol: {} {}:{}", js(data, "fqn"), js(data, "file"), jn(data, "line"));
             if let Some(refs) = ja(data, "references") {
                 println!("refs: {}", refs.len());
-                for r in refs { println!("  {}:{}", js(r, "file"), jn(r, "line")); }
+                // Group by file to reduce output size
+                let mut by_file: std::collections::BTreeMap<String, Vec<i64>> = std::collections::BTreeMap::new();
+                for r in refs {
+                    by_file.entry(js(r, "file")).or_default().push(jn(r, "line"));
+                }
+                for (file, lines) in &by_file {
+                    let line_str: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+                    println!("  {} :{}", file, line_str.join(","));
+                }
             }
         }
         "impact" | "symbol_impact" => {
@@ -495,7 +556,8 @@ fn run_buck2(action: Buck2Action) {
                         println!("file: {}", file);
                         for t in &results {
                             let pkg = infrastructure::buck2::package_from_targets_path(&t.path);
-                            println!("  //{}:{} {}", pkg, t.name, t.rule);
+                            let dep_info = t.deps.as_deref().unwrap_or("[]");
+                            println!("  //{}:{} {} deps={}", pkg, t.name, t.rule, dep_info);
                         }
                     }
                 } else {
@@ -506,6 +568,11 @@ fn run_buck2(action: Buck2Action) {
                         for t in &results {
                             let pkg = infrastructure::buck2::package_from_targets_path(&t.path);
                             println!("  //{}:{}  ({})", pkg, t.name, t.rule);
+                            if let Some(ref deps) = t.deps {
+                                if deps != "[]" && !deps.is_empty() {
+                                    println!("    deps: {}", deps);
+                                }
+                            }
                         }
                     }
                 }

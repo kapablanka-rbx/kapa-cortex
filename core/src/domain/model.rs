@@ -46,7 +46,7 @@ pub struct Reference {
     pub line: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ImpactResult {
     pub target: String,
     pub direct: Vec<String>,
@@ -59,7 +59,7 @@ impl ImpactResult {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ExplainResult {
     pub fqn: String,
     pub file: String,
@@ -70,7 +70,7 @@ pub struct ExplainResult {
     pub overrides: Vec<SymbolDef>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TraceResult {
     pub source: String,
     pub target: String,

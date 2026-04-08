@@ -29,6 +29,23 @@ impl LlmClient {
         reqwest::blocking::get(&format!("{}/api/tags", self.base_url)).is_ok()
     }
 
+    pub fn generate_title(&self, diff: &str, paths: &[String]) -> Result<String, String> {
+        let file_list = paths.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+        let prompt = format!(
+            "Given this diff and file list, write a one-line PR title.\nFiles: {}\nDiff:\n{}\nTitle:",
+            file_list,
+            &diff[..diff.len().min(500)]
+        );
+        let response = self.generate(&prompt)?;
+        // Try to parse as JSON in case the model wraps it
+        if let Some(val) = parse_llm_json(&response) {
+            if let Some(title) = val.get("title").and_then(|t| t.as_str()) {
+                return Ok(title.to_string());
+            }
+        }
+        Ok(response.lines().next().unwrap_or(&response).trim().to_string())
+    }
+
     pub fn generate(&self, prompt: &str) -> Result<String, String> {
         let request = OllamaRequest {
             model: self.model.clone(),
@@ -95,13 +112,25 @@ pub fn rule_based_description(files: &[String]) -> String {
     )
 }
 
-/// Generate a title from file paths and symbols.
+/// Generate a title from diff content, file paths, and symbols.
 pub fn rule_based_title(diff: &str, paths: &[String], symbols: &[String]) -> String {
     if paths.is_empty() {
         return "Empty change".to_string();
     }
     if let Some(sym) = symbols.first() {
         return format!("Add {}", sym);
+    }
+    // Check diff for new class/function definitions
+    for line in diff.lines() {
+        if line.starts_with("+class ") || line.starts_with("+struct ") {
+            let name = line.trim_start_matches('+')
+                .split_whitespace().nth(1)
+                .and_then(|w| w.split(&[':', '(', '{'][..]).next())
+                .unwrap_or("");
+            if !name.is_empty() {
+                return format!("Add {}", name);
+            }
+        }
     }
     let module = std::path::Path::new(&paths[0]).components().next()
         .map(|c| c.as_os_str().to_string_lossy().to_string())

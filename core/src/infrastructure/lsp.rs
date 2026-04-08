@@ -1,10 +1,9 @@
 use serde_json::Value;
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 pub struct LspClient {
     process: Child,
@@ -200,24 +199,25 @@ fn path_to_uri(path: &str) -> String {
 }
 
 fn find_trigger_file(root: &str, language: &str) -> Option<String> {
-    // For C/C++: grab first file from compile_commands.json
-    let cdb = Path::new(root).join("compile_commands.json");
-    if cdb.exists() {
-        if let Ok(content) = std::fs::read_to_string(&cdb) {
-            if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
-                if let Some(first) = entries.first() {
-                    if let Some(file) = first.get("file").and_then(|f| f.as_str()) {
-                        return Some(file.to_string());
+    match language {
+        "cpp" | "c" => {
+            // Grab first file from compile_commands.json to kick CDB discovery
+            let cdb = Path::new(root).join("compile_commands.json");
+            if cdb.exists() {
+                if let Ok(content) = std::fs::read_to_string(&cdb) {
+                    if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
+                        if let Some(first) = entries.first() {
+                            if let Some(file) = first.get("file").and_then(|f| f.as_str()) {
+                                return Some(file.to_string());
+                            }
+                        }
                     }
                 }
             }
+            None
         }
+        _ => None,
     }
-    None
-}
-
-pub fn detect_language(root: &str) -> Option<&'static str> {
-    detect_all_languages(root).into_iter().next()
 }
 
 /// Detect all languages present in the repo from project files.

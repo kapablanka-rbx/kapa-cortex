@@ -2,37 +2,25 @@
 
 Local code intelligence engine — stacked PRs, repo analysis, dependency graphs.
 
-Analyzes code dependencies across 15+ languages using tree-sitter, ast-grep,
-ctags, lizard, difftastic, and co-change history. Splits feature branches into
-small PRs (~3 files, ~200 lines), generates git commands, and uses a local LLM
-(ollama) for smarter grouping. Runs as a CLI, daemon, or Claude Code skill.
+Indexes source repositories using ctags, tree-sitter, and LSP servers.
+Answers structural queries (definitions, references, impact, call graphs)
+and splits feature branches into small stacked PRs (~3 files, ~200 lines).
+Runs as a daemon, CLI, MCP server, or Claude Code skill.
 
-## Install
-
-```bash
-pip install -e .
-
-# Now use it anywhere:
-kapa-cortex --help
-```
-
-Or without installing:
+## Build
 
 ```bash
-pip install networkx
-python kapa-cortex.py --help
+cd core
+cargo build --release
 ```
 
 ## Quick Start
 
 ```bash
-kapa-cortex index                       # pre-compute caches
+kapa-cortex index                       # build symbol + call graph index
 kapa-cortex analyze                     # see proposed stacked PRs
 kapa-cortex analyze --json              # JSON output
-kapa-cortex plan                        # generate git commands
-kapa-cortex run --dry-run               # preview execution
-kapa-cortex run                         # execute the plan
-kapa-cortex status                      # check progress
+kapa-cortex analyze --brief             # token-efficient output for AI agents
 kapa-cortex analyze --base develop      # custom base branch
 ```
 
@@ -41,106 +29,91 @@ kapa-cortex analyze --base develop      # custom base branch
 Start once, query many times — keeps LSP servers warm and index in memory:
 
 ```bash
-kapa-cortex daemon start                # boots pyright, clangd, gopls, jdtls, rust-analyzer
+kapa-cortex daemon start                # boots clangd, pyright, gopls, rust-analyzer, ...
 kapa-cortex daemon status               # check health
-kapa-cortex daemon query analyze        # fast query
-kapa-cortex daemon query impact src/auth.py
-kapa-cortex daemon query hotspots
 kapa-cortex daemon stop
+```
+
+Query commands auto-start the daemon if it's not running.
+
+## Code Intelligence
+
+```bash
+kapa-cortex defs MyClass                # find all definitions of a symbol
+kapa-cortex inspect MyClass::method     # signature, callers, callees, overrides
+kapa-cortex refs MyClass::method        # all references via LSP
+kapa-cortex rdeps src/auth.rs           # what breaks if this file changes
+kapa-cortex deps src/auth.rs            # transitive dependencies
+kapa-cortex trace source_fn target_fn   # call path between two symbols
+kapa-cortex symbols src/auth.rs         # list all symbols in a file
+kapa-cortex hotspots                    # rank files by risk (complexity * dependents)
 ```
 
 ## Extract Specific Changes
 
-Pull a subset of files into a separate PR branch using natural language:
+Pull a subset of files into a separate PR branch:
 
 ```bash
-kapa-cortex extract "gradle init-script files"
-kapa-cortex extract "src/core/ changes"
+kapa-cortex extract "gradle files"
+kapa-cortex extract "src/core/ changes" --branch pr/core-refactor
 kapa-cortex extract "all CMakeLists.txt changes"
-kapa-cortex extract "python test files"
-kapa-cortex extract "the authentication refactor"
+```
+
+## Buck2 Build System
+
+```bash
+kapa-cortex buck2 targets               # list all targets
+kapa-cortex buck2 owner src/main.rs     # find owning target
+kapa-cortex buck2 deps //app:lib        # target dependencies
+kapa-cortex buck2 rdeps //app:lib       # reverse target dependencies
+```
+
+## MCP Server
+
+Run as an MCP server for AI agent integration:
+
+```bash
+kapa-cortex mcp                         # stdio JSON-RPC 2.0
 ```
 
 ## Claude Code Skill
 
-Install as a Claude Code skill for token-efficient analysis:
-
 ```bash
-kapa-cortex install-skill
+kapa-cortex install-skill               # install SKILL.md to ~/.claude/
 ```
 
-Claude Code will auto-trigger on phrases like "split this branch into PRs",
-"analyze my changes", or "what depends on this file".
+## Output Modes
 
-## Output Formats
+All query commands support three output modes:
 
-```bash
-kapa-cortex analyze --json              # JSON
-kapa-cortex analyze --dot               # DOT graph
-kapa-cortex plan --commands             # git commands only
-kapa-cortex plan --shell-script > stack.sh  # bash script
-```
-
-## AI Mode
-
-AI is **on by default** using ollama. If ollama isn't running, it silently
-falls back to rule-based analysis. No API keys needed.
-
-```bash
-kapa-cortex setup                # install all deps
-kapa-cortex setup --minimal      # smallest model (~1.6 GB)
-kapa-cortex ai-check             # check backends
-kapa-cortex analyze --no-ai      # disable AI for a single run
-```
-
-## Risk & Complexity Labels
-
-The analysis shows human-readable warnings. Raw scores stay in `--json` output.
-
-### Risk (per PR, 0.0 – 1.0)
-
-Based on: structural code lines (30%), cyclomatic complexity (30%),
-cross-PR dependencies (20%), language diversity (20%).
-
-| Score | Label | What it means |
-|-------|-------|---------------|
-| 0.0 – 0.2 | Low | Small, simple, safe to merge |
-| 0.2 – 0.5 | Moderate | Normal review needed |
-| 0.5 – 0.7 | **High** | Careful review — shows warning with reasons |
-| 0.7 – 1.0 | **Critical** | Split further or get senior review |
-
-### Complexity (per PR, cyclomatic total)
-
-| Score | Label | What it means |
-|-------|-------|---------------|
-| 0 – 5 | Simple | Straightforward code |
-| 5 – 15 | Moderate | Some branching logic |
-| 15 – 30 | **Complex** | Shows warning — consider careful review |
-| 30+ | **Very complex** | Shows warning — consider refactoring |
-
-Warnings only appear for High/Critical risk and Complex/Very complex PRs.
-Low and Moderate PRs show no warnings — clean output.
+- `--json` — full structured JSON
+- `--brief` — compact text, optimized for AI agent token efficiency
+- (default) — human-readable with ANSI colors
 
 ## Supported Languages
 
 Python, C, C++, Java, Kotlin, Go, Rust, JavaScript, TypeScript,
-Gradle (Groovy + KTS), CMake, Buck2, BXL, Starlark/Bazel, Groovy.
+Gradle (Groovy + KTS), CMake, Buck2, BXL, Starlark/Bazel, Groovy, Lua.
 
-Analysis chain: LSP (daemon) → tree-sitter → ast-grep → regex.
+Analysis chain: LSP (daemon) -> tree-sitter -> ctags -> regex.
 
-## Architecture (DDD + 4 Layers)
+## Architecture
+
+DDD with 4 layers. See [docs/architecture.md](docs/architecture.md).
 
 ```
-src/
-  domain/          # Pure logic, zero external deps
-  application/     # Use cases, orchestration
-  infrastructure/  # Git, parsers, LSP, LLM, caches
-  interface/       # CLI, daemon, reporters, skill
+core/src/
+  domain/          Pure logic, zero external deps
+  application/     Use cases: analyze, extract, index
+  infrastructure/  Git, parsers, LSP, SQLite, complexity
+  iface/           CLI, daemon, MCP, reporters
 ```
 
-## Running Tests
+## Tests
 
 ```bash
-python -m unittest discover -s tests -v    # all tests
-python -m unittest discover -s tests/domain -v  # domain only (fast)
+cd core
+cargo test --lib                        # 146 unit tests
+cargo test --test pr_splitting          # 11 integration scenarios
+cargo test                              # all tests
 ```

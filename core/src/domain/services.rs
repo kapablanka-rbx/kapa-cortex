@@ -25,6 +25,74 @@ pub fn match_files_keyword(diff_text: &str, keyword: &str) -> bool {
     diff_text.contains(keyword)
 }
 
+fn strip_visibility(code: &str) -> &str {
+    // pub(crate), pub(super), pub
+    if code.starts_with("pub(") {
+        if let Some(end) = code.find(')') {
+            return code[end + 1..].trim_start();
+        }
+    }
+    for prefix in &["pub ", "public ", "export ", "protected ", "private ", "internal "] {
+        if code.starts_with(prefix) {
+            return &code[prefix.len()..];
+        }
+    }
+    code
+}
+
+fn extract_type_name(code: &str) -> Option<String> {
+    for keyword in &["struct ", "class ", "enum ", "trait ", "interface ", "type "] {
+        if code.starts_with(keyword) {
+            let rest = &code[keyword.len()..];
+            let name = rest.split(&[' ', '<', '(', '{', ':', ';'][..]).next()?.trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn extract_function_name(code: &str) -> Option<String> {
+    for keyword in &["fn ", "def ", "func ", "function "] {
+        if code.starts_with(keyword) {
+            let rest = &code[keyword.len()..];
+            let name = rest.split(&['(', '<', ' ', ':'][..]).next()?.trim();
+            if !name.is_empty() && name != "main" {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn common_directory(paths: &[String]) -> String {
+    if paths.is_empty() {
+        return "root".to_string();
+    }
+    let first_parts: Vec<&str> = paths[0].split('/').collect();
+    let mut depth = first_parts.len().saturating_sub(1); // exclude filename
+
+    for path in &paths[1..] {
+        let parts: Vec<&str> = path.split('/').collect();
+        let max = depth.min(parts.len().saturating_sub(1));
+        depth = 0;
+        for i in 0..max {
+            if first_parts[i] == parts[i] {
+                depth = i + 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    if depth == 0 {
+        first_parts[0].to_string()
+    } else {
+        first_parts[..depth].join("/")
+    }
+}
+
 /// Generate a PR title from changed files.
 pub fn generate_title(paths: &[String], statuses: &[String], diffs: &[String]) -> String {
     if paths.is_empty() {
@@ -46,29 +114,30 @@ pub fn generate_title(paths: &[String], statuses: &[String], diffs: &[String]) -
             .map(|f| f.to_string_lossy().to_string()).unwrap_or_default());
     }
 
-    // New class or function in diff?
+    // New type or function definition in diff?
+    // Supports: class (Python/Java), struct/enum (Rust/C++/Go),
+    // def/fn/func/function keywords across languages.
     for diff in diffs {
         for line in diff.lines() {
-            if line.starts_with("+class ") {
-                let name = line.trim_start_matches("+class ").split([':', '(']).next().unwrap_or("").trim();
-                if !name.is_empty() {
-                    return format!("Add {}", name);
-                }
+            if !line.starts_with('+') || line.starts_with("+++") {
+                continue;
             }
-            if line.starts_with("+def ") || line.starts_with("+fn ") {
-                let name = line.trim_start_matches("+def ").trim_start_matches("+fn ")
-                    .split('(').next().unwrap_or("").trim();
-                if !name.is_empty() {
-                    return format!("Add {}", name);
-                }
+            let code = &line[1..].trim_start();
+
+            // Strip visibility: pub, pub(crate), public, export, etc.
+            let code = strip_visibility(code);
+
+            if let Some(name) = extract_type_name(code) {
+                return format!("Add {}", name);
+            }
+            if let Some(name) = extract_function_name(code) {
+                return format!("Add {}", name);
             }
         }
     }
 
-    // Fallback: module name
-    let module = Path::new(&paths[0]).components().next()
-        .map(|c| c.as_os_str().to_string_lossy().to_string())
-        .unwrap_or_else(|| "root".to_string());
+    // Fallback: deepest common directory
+    let module = common_directory(paths);
     format!("Update {}", module)
 }
 
@@ -239,6 +308,48 @@ mod tests {
     }
 
     #[test]
+    fn test_title_rust_struct() {
+        let diff = "+pub struct RateLimiter {\n+    max_requests: usize,\n+}".to_string();
+        let title = generate_title(&["src/api/rate_limiter.rs".into()], &["A".into()], &[diff]);
+        assert!(title.contains("RateLimiter"), "got: {}", title);
+    }
+
+    #[test]
+    fn test_title_rust_fn() {
+        let diff = "+pub fn validate_token(token: &str) -> bool {\n+    true\n+}".to_string();
+        let title = generate_title(&["src/auth.rs".into()], &["M".into()], &[diff]);
+        assert!(title.contains("validate_token"), "got: {}", title);
+    }
+
+    #[test]
+    fn test_title_rust_enum() {
+        let diff = "+pub enum AuthType {\n+    Session,\n+    Bearer,\n+}".to_string();
+        let title = generate_title(&["src/auth.rs".into()], &["M".into()], &[diff]);
+        assert!(title.contains("AuthType"), "got: {}", title);
+    }
+
+    #[test]
+    fn test_title_cpp_class() {
+        let diff = "+class btConstraintSolvingStep {\n+public:\n+};".to_string();
+        let title = generate_title(&["src/dynamics.cpp".into()], &["A".into()], &[diff]);
+        assert!(title.contains("btConstraintSolvingStep"), "got: {}", title);
+    }
+
+    #[test]
+    fn test_title_go_func() {
+        let diff = "+func HandleRequest(w http.ResponseWriter, r *http.Request) {\n+}".to_string();
+        let title = generate_title(&["handler.go".into()], &["M".into()], &[diff]);
+        assert!(title.contains("HandleRequest"), "got: {}", title);
+    }
+
+    #[test]
+    fn test_title_ts_function() {
+        let diff = "+export function validateEmail(email: string): boolean {\n+}".to_string();
+        let title = generate_title(&["src/utils.ts".into()], &["M".into()], &[diff]);
+        assert!(title.contains("validateEmail"), "got: {}", title);
+    }
+
+    #[test]
     fn test_title_fallback() {
         let title = generate_title(&["src/config.py".into()], &["M".into()], &[]);
         assert!(title.to_lowercase().contains("src"));
@@ -247,6 +358,16 @@ mod tests {
     #[test]
     fn test_title_empty() {
         assert_eq!(generate_title(&[], &[], &[]), "Empty PR");
+    }
+
+    #[test]
+    fn test_title_common_directory() {
+        let title = generate_title(
+            &["src/auth/login.rs".into(), "src/auth/session.rs".into()],
+            &["M".into(), "M".into()],
+            &[],
+        );
+        assert!(title.contains("src/auth"), "got: {}", title);
     }
 
     // ── Test pair finder ──

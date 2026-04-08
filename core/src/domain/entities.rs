@@ -32,10 +32,10 @@ impl ChangedFile {
 
     pub fn module_key(&self) -> String {
         let parts: Vec<&str> = self.path.split('/').collect();
-        if parts.len() <= 1 {
-            "__root__".to_string()
-        } else {
-            parts[0].to_string()
+        match parts.len() {
+            0 | 1 => "__root__".to_string(),
+            2 => parts[0].to_string(),
+            _ => format!("{}/{}", parts[0], parts[1]),
         }
     }
 }
@@ -62,6 +62,7 @@ pub struct ProposedPr {
     pub files: Vec<String>,
     pub order: i64,
     pub risk_level: String,
+    pub merge_strategy: String,
     pub depends_on: Vec<i64>,
 }
 
@@ -121,8 +122,10 @@ mod tests {
 
     #[test]
     fn test_module_key() {
-        assert_eq!(file("src/foo.py", 1, 0).module_key(), "src");
+        assert_eq!(file("src/auth/login.rs", 1, 0).module_key(), "src/auth");
+        assert_eq!(file("src/api/routes.rs", 1, 0).module_key(), "src/api");
+        assert_eq!(file("src/main.rs", 1, 0).module_key(), "src");
         assert_eq!(file("setup.py", 1, 0).module_key(), "__root__");
-        assert_eq!(file("tests/unit/test_foo.py", 1, 0).module_key(), "tests");
+        assert_eq!(file("tests/unit/test_foo.py", 1, 0).module_key(), "tests/unit");
     }
 }

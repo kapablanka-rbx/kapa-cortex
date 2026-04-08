@@ -13,23 +13,6 @@ pub struct DaemonState {
     pub lsp_clients: std::sync::Mutex<HashMap<String, LspClient>>,
 }
 
-impl DaemonState {
-    pub fn get_lsp_for_file(&self, file_path: &str) -> Option<String> {
-        let ext = std::path::Path::new(file_path).extension()?.to_str()?;
-        let lang = match ext {
-            "c" | "h" | "cpp" | "cc" | "hpp" | "cxx" | "hxx" => "cpp",
-            "py" | "pyi" => "python",
-            "go" => "go",
-            "rs" => "rust",
-            "java" => "java",
-            "lua" => "lua",
-            "js" | "jsx" | "ts" | "tsx" => "typescript",
-            _ => return None,
-        };
-        Some(lang.to_string())
-    }
-}
-
 pub fn run(db: Arc<Database>) -> std::io::Result<()> {
     let socket_path = Path::new(SOCKET_PATH);
     if socket_path.exists() {
@@ -72,7 +55,7 @@ pub fn run(db: Arc<Database>) -> std::io::Result<()> {
             Ok(stream) => {
                 let state = Arc::clone(&state);
                 std::thread::spawn(move || {
-                    if let Err(err) = handler::handle_connection_v2(stream, &state) {
+                    if let Err(err) = handler::handle_connection(stream, &state) {
                         let msg = err.to_string();
                         if !msg.contains("fill whole buffer") && !msg.contains("broken pipe") {
                             eprintln!("  \x1b[33mHandler error: {}\x1b[0m", msg);

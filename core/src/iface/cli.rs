@@ -145,6 +145,23 @@ pub enum Command {
         #[arg(long)]
         brief: bool,
     },
+    /// Extract files matching a description into a PR branch
+    Extract {
+        /// Description of what to extract (e.g. "gradle files", "auth changes", "*.bxl")
+        description: String,
+        /// Base branch
+        #[arg(long)]
+        base: Option<String>,
+        /// Create a branch with the matched files
+        #[arg(long)]
+        branch: Option<String>,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+        /// Briefing output
+        #[arg(long)]
+        brief: bool,
+    },
     /// Buck2 build system queries
     #[command(name = "buck2")]
     Buck2 {
@@ -158,6 +175,8 @@ pub enum Command {
         /// Files to re-index (all if omitted)
         files: Vec<String>,
     },
+    /// Start MCP server (stdio transport for AI agents)
+    Mcp,
     /// Install Claude Code skill
     InstallSkill,
 }

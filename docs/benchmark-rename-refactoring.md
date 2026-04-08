@@ -5,14 +5,21 @@ kapa-cortex uses universal-ctags for symbol index + clangd LSP for references.
 
 ## Summary
 
-| Refactoring | Grep scope | With skill | Without skill | Savings |
-|-------------|-----------|-----------|--------------|---------|
-| Rename method | 31 hits, 16 files | 1,541 | 9,061 | **5.9x** |
-| Change signature | 102 hits, 36 files | 3,087 | 14,178 | **4.6x** |
-| Extract interface | 273 hits, 44 files | 8,539 | 58,647 | **6.9x** |
-| Move to namespace | 10,107 hits, 528 files | 5,058 | 346,593 | **68.5x** |
-| Delete dead code | 54 hits, 24 files | 515 | 9,962 | **19.3x** |
-| Replace inheritance | 80 hits, 33 files | 3,113 | 16,283 | **5.2x** |
+| Refactoring | With skill (bytes) | Without skill (bytes) | Savings |
+|-------------|-----------|--------------|---------|
+| Rename method | 816 | 28,516 | **35x** |
+| Change signature | 2,260 | 2,593 | **1.1x** |
+| Extract interface | 1,250 | 117,553 | **94x** |
+| Move to namespace | 124 | 92,917 | **749x** |
+| Replace inheritance | 385 | 28,268 | **74x** |
+
+Measured on bullet3 (2,862 files, C++). Tool output bytes only — does not include
+AI reasoning tokens (which the zero-reasoning skill rule eliminates separately).
+
+Note: dead code detection was removed from this benchmark. ctags cannot reliably
+detect macro-wrapped C++ class declarations (e.g. `ATTRIBUTE_ALIGNED16(class)`),
+which produces false "not found" results. Dead code detection requires solving
+macro expansion, reflection, and external consumers — not yet implemented.
 
 ## 1. Rename method
 
@@ -24,7 +31,7 @@ Result: 8 files changed, 15 lines.
 
 | Step | Tokens |
 |------|--------|
-| `kapa-cortex lookup solveConstraints` — 15 FQN-scoped definitions | 691 |
+| `kapa-cortex defs solveConstraints` — 15 FQN-scoped definitions | 691 |
 | `kapa-cortex refs btDiscreteDynamicsWorld::solveConstraints` — 2 call sites | 50 |
 | Reasoning (structured output, pick DynamicsWorld family) | 500 |
 | sed + verify | 300 |
@@ -44,7 +51,7 @@ Result: 8 files changed, 15 lines.
 | sed + verify | 300 |
 | **Total (8 tool calls)** | **9,061** |
 
-**Key savings**: 4,592 tokens reading subclass headers eliminated. `lookup` already lists every override with scope.
+**Key savings**: 4,592 tokens reading subclass headers eliminated. `defs` already lists every override with scope.
 
 ## 2. Change method signature
 
@@ -55,7 +62,7 @@ Result: 8 files changed, 15 lines.
 
 | Step | Tokens |
 |------|--------|
-| `kapa-cortex lookup addConstraint` — 6 definitions with scopes | 285 |
+| `kapa-cortex defs addConstraint` — 6 definitions with scopes | 285 |
 | `kapa-cortex refs btDiscreteDynamicsWorld::addConstraint` — 77 call sites | 1,802 |
 | Reasoning (each ref = a call site to update, structured) | 1,000 |
 | **Total (2 tool calls)** | **3,087** |
@@ -83,7 +90,7 @@ which are type usages (pointer decl), calls (constructor), inherits, member acce
 
 | Step | Tokens |
 |------|--------|
-| `kapa-cortex lookup btCollisionWorld` — 5 definitions | 231 |
+| `kapa-cortex defs btCollisionWorld` — 5 definitions | 231 |
 | `kapa-cortex refs btCollisionWorld` — 202 references | 5,308 |
 | Reasoning (refs are just file+line, need to plan extraction) | 3,000 |
 | **Total (2 tool calls)** | **8,539** |
@@ -114,7 +121,7 @@ usages without requiring full file reads.
 
 | Step | Tokens |
 |------|--------|
-| `kapa-cortex lookup btVector3` — 1 definition (unambiguous) | 58 |
+| `kapa-cortex defs btVector3` — 1 definition (unambiguous) | 58 |
 | No refs needed — sed rename is sufficient for a simple name swap | 0 |
 | Reasoning (unambiguous, plan sed command) | 5,000 |
 | **Total (1 tool call)** | **5,058** |
@@ -143,7 +150,7 @@ The key question: does anything reference it?
 
 | Step | Tokens |
 |------|--------|
-| `kapa-cortex lookup btVoronoiSimplexSolver` — 0 definitions in index | 15 |
+| `kapa-cortex defs btVoronoiSimplexSolver` — 0 definitions in index | 15 |
 | Reasoning (0 defs = not in our index, check if it's used) | 500 |
 | **Total (1 tool call)** | **515** |
 
@@ -170,7 +177,7 @@ to determine if the 54 grep hits are live references or dead includes.
 
 | Step | Tokens |
 |------|--------|
-| `kapa-cortex lookup btDynamicsWorld` — 4 definitions | 172 |
+| `kapa-cortex defs btDynamicsWorld` — 4 definitions | 172 |
 | `kapa-cortex refs btDynamicsWorld` — 38 references | 941 |
 | Reasoning (plan composition: which virtual methods, which subclasses) | 2,000 |
 | **Total (2 tool calls)** | **3,113** |
@@ -198,4 +205,4 @@ eliminating 5,800 tokens of header file reading.
   relevant sections, not always the full file)
 - Reasoning tokens estimated based on complexity of manual analysis needed
 - bullet3: 2,869 indexed files, clangd with background indexing
-- All "with skill" numbers are from actual `kapa-cortex lookup/refs --json` output sizes
+- All "with skill" numbers are from actual `kapa-cortex defs/refs --json` output sizes

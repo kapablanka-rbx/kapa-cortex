@@ -1,21 +1,4 @@
 use std::process::Command;
-use serde::Deserialize;
-
-#[derive(Debug, Deserialize)]
-struct LizardOutput {
-    #[serde(rename = "filename")]
-    file: String,
-    #[serde(rename = "nloc")]
-    lines: i64,
-    #[serde(rename = "function_list")]
-    functions: Vec<LizardFunction>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LizardFunction {
-    #[serde(rename = "cyclomatic_complexity")]
-    complexity: i64,
-}
 
 pub struct FileComplexity {
     pub path: String,

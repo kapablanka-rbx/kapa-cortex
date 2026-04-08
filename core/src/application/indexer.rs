@@ -56,7 +56,7 @@ pub fn index_repo(db: &Database, root: &str) -> Result<(), String> {
                 symbol_count += 1;
             }
 
-            let file_imports = crate::infrastructure::imports::parse_includes(file_path)?;
+            let file_imports = parse_imports(file_path)?;
             for imp in &file_imports {
                 conn.execute(
                     "INSERT INTO imports (file_path, raw, module, kind) VALUES (?, ?, ?, ?)",
@@ -174,6 +174,16 @@ fn index_targets(db: &Database, root: &str, root_prefix: &str) -> Result<usize, 
 
             let package = buck2::package_from_targets_path(&relative);
 
+            // Store load() statements as import edges
+            for load in &parsed.loads {
+                let dep_label = buck2::resolve_label(&load.module, &package);
+                let symbols_str = load.symbols.join(", ");
+                conn.execute(
+                    "INSERT OR IGNORE INTO imports (file_path, raw, module, kind) VALUES (?, ?, ?, ?)",
+                    params![relative, format!("load({}, {})", load.module, symbols_str), dep_label, "load"],
+                ).map_err(|e| e.to_string())?;
+            }
+
             for target in &parsed.targets {
                 let srcs_json = serde_json::to_string(&target.srcs).unwrap_or_default();
                 let deps_json = serde_json::to_string(&target.deps).unwrap_or_default();
@@ -234,6 +244,70 @@ fn compute_complexity(db: &Database, root: &str, _root_prefix: &str) -> Result<u
     Ok(count)
 }
 
+/// Parse imports using the best parser for each language.
+/// C/C++/Python/Java use the file-based parser; others use source-based parsers.
+pub fn parse_imports_for_file(file_path: &str) -> Result<Vec<crate::infrastructure::imports::ImportEntry>, String> {
+    parse_imports(file_path)
+}
+
+fn parse_imports(file_path: &str) -> Result<Vec<crate::infrastructure::imports::ImportEntry>, String> {
+    use crate::infrastructure::imports;
+
+    let ext = std::path::Path::new(file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+
+    match ext {
+        // Languages with source-based parsers
+        "go" => {
+            let source = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
+            Ok(imports::parse_go_source(&source))
+        }
+        "rs" => {
+            let source = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
+            Ok(imports::parse_rust_source(&source))
+        }
+        "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" => {
+            let source = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
+            Ok(imports::parse_js_ts_source(&source))
+        }
+        "groovy" => {
+            let source = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
+            Ok(imports::parse_groovy_source(&source))
+        }
+        // CMake files
+        _ if file_path.ends_with("CMakeLists.txt") || ext == "cmake" => {
+            let source = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
+            Ok(imports::parse_cmake_source(&source))
+        }
+        // Gradle files
+        _ if file_path.ends_with("build.gradle") => {
+            let source = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
+            Ok(imports::parse_gradle_groovy_source(&source))
+        }
+        "kts" => {
+            let source = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
+            Ok(imports::parse_gradle_kts_source(&source))
+        }
+        // Buck2/Starlark/BXL
+        "bzl" => {
+            let source = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
+            Ok(imports::parse_starlark_source(&source))
+        }
+        "bxl" => {
+            let source = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
+            Ok(imports::parse_bxl_source(&source))
+        }
+        "star" => {
+            let source = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
+            Ok(imports::parse_starlark_source(&source))
+        }
+        // C/C++/Python/Java/Kotlin — handled by the file-based parser
+        _ => imports::parse_includes(file_path),
+    }
+}
+
 fn detect_language(file_path: &str) -> Option<&str> {
     let ext = std::path::Path::new(file_path).extension().and_then(|e| e.to_str())?;
     match ext {
@@ -279,29 +353,116 @@ fn build_edges(db: &Database) -> Result<usize, String> {
             .filter_map(|r| r.ok())
             .collect();
 
+        // Build a set of all file paths for quick lookup
+        let path_set: std::collections::HashSet<String> = paths.iter().cloned().collect();
+
         conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
         let mut edge_count = 0;
         for (source, module) in &import_rows {
-            let basename = std::path::Path::new(module)
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if let Some(targets) = file_index.get(&basename) {
-                for target in targets {
-                    if target != source {
-                        conn.execute(
-                            "INSERT OR IGNORE INTO edges (source, target, kind) VALUES (?, ?, 'import')",
-                            params![source, target],
-                        )
-                        .map_err(|e| e.to_string())?;
-                        edge_count += 1;
-                    }
+            let resolved = resolve_module_to_files(module, &file_index, &path_set);
+            for target in &resolved {
+                if target != source {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO edges (source, target, kind) VALUES (?, ?, 'import')",
+                        params![source, target],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    edge_count += 1;
                 }
             }
         }
         conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
         Ok(edge_count)
     })
+}
+
+/// Resolve a module string to actual file paths in the index.
+/// Handles multiple conventions:
+///   - C/C++:  "foo/bar.h" → basename match "bar.h"
+///   - Rust:   "crate.auth.LoginHandler" → try "src/auth.rs", "src/auth/mod.rs", "src/auth/login_handler.rs"
+///   - Python: "src.auth.login" → try "src/auth/login.py", "src/auth.py"
+///   - Go:     "github.com/pkg/errors" → basename match
+///   - JS/TS:  "./utils" → try "utils.ts", "utils.js", "utils/index.ts"
+fn resolve_module_to_files(
+    module: &str,
+    basename_index: &std::collections::HashMap<String, Vec<String>>,
+    path_set: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let mut results = Vec::new();
+
+    // Strategy 1: direct basename match (works for C/C++ includes)
+    let basename = std::path::Path::new(module)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if let Some(targets) = basename_index.get(&basename) {
+        results.extend(targets.iter().cloned());
+    }
+
+    // Strategy 2: convert dotted module path to file path
+    // "crate.auth.login" or "std.collections.HashMap" → "auth/login"
+    let dotted = module.replace("::", ".").replace("::", "/");
+    let segments: Vec<&str> = dotted.split('.').collect();
+    if segments.len() >= 2 {
+        // Skip "crate", "self", "super" prefixes
+        let start = match segments[0] {
+            "crate" | "self" | "super" | "std" => 1,
+            _ => 0,
+        };
+        if start < segments.len() {
+            let module_path = segments[start..].join("/");
+
+            // Try common extensions
+            for ext in &["rs", "py", "go", "java", "kt", "ts", "tsx", "js", "jsx"] {
+                // Direct: auth/login.rs
+                let candidate = format!("{}.{}", module_path, ext);
+                if path_set.contains(&candidate) {
+                    results.push(candidate);
+                }
+                // With src/ prefix: src/auth/login.rs
+                let candidate = format!("src/{}.{}", module_path, ext);
+                if path_set.contains(&candidate) {
+                    results.push(candidate);
+                }
+            }
+            // Rust mod.rs convention: auth/mod.rs
+            let mod_candidate = format!("{}/mod.rs", module_path);
+            if path_set.contains(&mod_candidate) {
+                results.push(mod_candidate);
+            }
+            let mod_candidate = format!("src/{}/mod.rs", module_path);
+            if path_set.contains(&mod_candidate) {
+                results.push(mod_candidate);
+            }
+            // Python __init__.py
+            let init_candidate = format!("{}/__init__.py", module_path);
+            if path_set.contains(&init_candidate) {
+                results.push(init_candidate);
+            }
+            // JS/TS index files
+            for idx in &["index.ts", "index.js", "index.tsx"] {
+                let candidate = format!("{}/{}", module_path, idx);
+                if path_set.contains(&candidate) {
+                    results.push(candidate);
+                }
+            }
+        }
+    }
+
+    // Strategy 3: relative path imports (JS/TS "./utils" → "utils.ts")
+    if module.starts_with("./") || module.starts_with("../") {
+        let clean = module.trim_start_matches("./").trim_start_matches("../");
+        for ext in &["ts", "tsx", "js", "jsx"] {
+            let candidate = format!("{}.{}", clean, ext);
+            if path_set.contains(&candidate) {
+                results.push(candidate);
+            }
+        }
+    }
+
+    results.sort();
+    results.dedup();
+    results
 }
 
 #[cfg(test)]
