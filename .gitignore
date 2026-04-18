@@ -10,3 +10,4 @@ build/
 .cortex-plan.json
 .history/
 .claude/skills/
+core/target/
