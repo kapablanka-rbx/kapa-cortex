@@ -32,6 +32,9 @@ pub enum Command {
     Index {
         /// Root directory (default: current dir)
         root: Option<String>,
+        /// Delete .cortex-cache before indexing
+        #[arg(long)]
+        clean: bool,
     },
     /// Go to definition of a symbol
     #[command(name = "defs")]
@@ -162,12 +165,32 @@ pub enum Command {
         #[arg(long)]
         brief: bool,
     },
+    /// Find which Buck2/CMake target owns a source file
+    Owner {
+        /// Source file path
+        file: String,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+        /// Briefing output
+        #[arg(long)]
+        brief: bool,
+    },
     /// Buck2 build system queries
     #[command(name = "buck2")]
     Buck2 {
         #[command(subcommand)]
         action: Buck2Action,
     },
+    /// Stacked PR workflow: plan then apply
+    #[command(name = "stack")]
+    Stack {
+        #[command(subcommand)]
+        action: StackAction,
+    },
+    /// Install /kapa and /cortex slash commands for Claude Code
+    #[command(name = "install-skill")]
+    InstallSkill,
     /// Check status
     Status,
     /// Re-index specific files
@@ -175,27 +198,15 @@ pub enum Command {
         /// Files to re-index (all if omitted)
         files: Vec<String>,
     },
-    /// Start MCP server (stdio transport for AI agents)
-    Mcp,
-    /// Install Claude Code skill
-    InstallSkill,
 }
 
 #[derive(Subcommand)]
 pub enum Buck2Action {
-    /// List all targets
+    /// List all indexed targets
     Targets {
         /// Filter by rule type (e.g. rust_library)
         #[arg(long)]
         rule: Option<String>,
-        /// Briefing output
-        #[arg(long)]
-        brief: bool,
-    },
-    /// Find which target owns a source file
-    Owner {
-        /// Source file path
-        file: String,
         /// Briefing output
         #[arg(long)]
         brief: bool,
@@ -215,6 +226,31 @@ pub enum Buck2Action {
         /// Briefing output
         #[arg(long)]
         brief: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum StackAction {
+    /// Analyze branch and write a stack plan to .cortex-cache/stack-plan.json
+    Plan {
+        /// Base branch
+        #[arg(long)]
+        base: Option<String>,
+        /// Max files per PR
+        #[arg(long, default_value = "3")]
+        max_files: usize,
+        /// Max lines per PR
+        #[arg(long, default_value = "200")]
+        max_lines: i64,
+    },
+    /// Apply the stack plan: create branches, commit, push, open PRs
+    Apply {
+        /// Path to plan file (default: .cortex-cache/stack-plan.json)
+        #[arg(long)]
+        plan: Option<String>,
+        /// Print what would happen without executing
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 

@@ -58,9 +58,6 @@ pub fn diff_text(base: &str, file_path: &str) -> Result<String, String> {
     run_git(&["diff", base, "--", file_path])
 }
 
-pub fn file_source(file_path: &str) -> Result<String, String> {
-    run_git(&["show", &format!("HEAD:{}", file_path)])
-}
 
 pub fn cherry_pick_files(base: &str, branch_name: &str, files: &[String]) -> Result<(), String> {
     run_git(&["checkout", "-b", branch_name, base])?;
@@ -70,6 +67,48 @@ pub fn cherry_pick_files(base: &str, branch_name: &str, files: &[String]) -> Res
     }
     run_git(&["add", "-A"])?;
     Ok(())
+}
+
+pub fn create_branch_from(base: &str, branch_name: &str) -> Result<(), String> {
+    run_git(&["checkout", "-b", branch_name, base])?;
+    Ok(())
+}
+
+pub fn checkout_files_from(source_branch: &str, files: &[String]) -> Result<(), String> {
+    for file in files {
+        run_git(&["checkout", source_branch, "--", file])?;
+    }
+    Ok(())
+}
+
+pub fn switch_branch(branch_name: &str) -> Result<(), String> {
+    run_git(&["checkout", branch_name])?;
+    Ok(())
+}
+
+pub fn commit(message: &str) -> Result<(), String> {
+    run_git(&["add", "-A"])?;
+    run_git(&["commit", "-m", message])?;
+    Ok(())
+}
+
+pub fn push_branch(branch_name: &str) -> Result<(), String> {
+    run_git(&["push", "-u", "origin", branch_name])?;
+    Ok(())
+}
+
+pub fn open_pr(title: &str, body: &str, base_branch: &str) -> Result<String, String> {
+    let output = Command::new("gh")
+        .args(["pr", "create", "--title", title, "--body", body, "--base", base_branch])
+        .output()
+        .map_err(|e| format!("gh failed: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let result = format!("gh pr create failed: {}", stderr.trim());
+        return Err(result);
+    }
+    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(result)
 }
 
 fn run_git(args: &[&str]) -> Result<String, String> {

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::path::Path;
 
 const TEXT_EXTENSIONS: &[&str] = &[
@@ -6,7 +6,7 @@ const TEXT_EXTENSIONS: &[&str] = &[
     ".yml", ".toml", ".ini", ".cfg", ".lock", ".log",
 ];
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangedFile {
     pub path: String,
     pub added: i64,
@@ -40,22 +40,7 @@ impl ChangedFile {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ImportRef {
-    pub raw: String,
-    pub module: String,
-    pub kind: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SymbolDef {
-    pub name: String,
-    pub kind: String,
-    pub line: i64,
-    pub scope: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProposedPr {
     pub title: String,
     pub description: String,
@@ -66,7 +51,7 @@ pub struct ProposedPr {
     pub depends_on: Vec<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisResult {
     pub branch: String,
     pub base: String,
@@ -74,19 +59,40 @@ pub struct AnalysisResult {
     pub prs: Vec<ProposedPr>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ExecutionStep {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackPr {
     pub order: i64,
-    pub command: String,
+    pub title: String,
     pub description: String,
-    pub status: String,
+    pub files: Vec<String>,
+    pub risk_level: String,
+    pub merge_strategy: String,
+    pub depends_on: Vec<i64>,
+    pub branch: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ExecutionPlan {
-    pub branch: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackPlan {
+    pub version: u32,
+    pub source_branch: String,
     pub base: String,
-    pub steps: Vec<ExecutionStep>,
+    pub created_at: String,
+    pub prs: Vec<StackPr>,
+}
+
+impl StackPr {
+    pub fn from_proposed(proposed: &ProposedPr, branch: String) -> StackPr {
+        StackPr {
+            order: proposed.order,
+            title: proposed.title.clone(),
+            description: proposed.description.clone(),
+            files: proposed.files.clone(),
+            risk_level: proposed.risk_level.clone(),
+            merge_strategy: proposed.merge_strategy.clone(),
+            depends_on: proposed.depends_on.clone(),
+            branch,
+        }
+    }
 }
 
 #[cfg(test)]

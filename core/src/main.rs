@@ -4,7 +4,7 @@ mod infrastructure;
 mod iface;
 
 use clap::Parser;
-use iface::cli::{Cli, Command, DaemonAction, Buck2Action, OutputMode, parse_output_mode};
+use iface::cli::{Cli, Command, DaemonAction, Buck2Action, StackAction, OutputMode, parse_output_mode};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,8 +17,18 @@ fn main() {
             DaemonAction::Stop => stop_daemon(),
             DaemonAction::Status => daemon_status(),
         },
-        Command::Index { root } => {
+        Command::Index { root, clean } => {
             let root = root.as_deref().unwrap_or(".");
+            if clean {
+                let cache_dir = format!("{}/.cortex-cache", root);
+                if std::path::Path::new(&cache_dir).exists() {
+                    std::fs::remove_dir_all(&cache_dir).unwrap_or_else(|e| {
+                        eprintln!("  \x1b[31mFailed to remove {}: {}\x1b[0m", cache_dir, e);
+                        std::process::exit(1);
+                    });
+                    eprintln!("  \x1b[32m✓\x1b[0m Removed {}", cache_dir);
+                }
+            }
             run_index(root);
         }
         Command::Defs { symbol, json, brief } => query("lookup", serde_json::json!({"target": symbol}), parse_output_mode(json, brief)),
@@ -106,9 +116,69 @@ fn main() {
                 }
             }
         }
+        Command::Owner { file, json, brief } => run_owner(&file, parse_output_mode(json, brief)),
         Command::Buck2 { action } => run_buck2(action),
-        Command::Mcp => iface::mcp::run(),
-        Command::InstallSkill => install_skill(),
+        Command::Stack { action } => run_stack(action),
+        Command::InstallSkill => run_install(),
+    }
+}
+
+fn run_stack(action: StackAction) {
+    match action {
+        StackAction::Plan { base, max_files, max_lines } => {
+            let base = base.unwrap_or_else(|| {
+                infrastructure::git::detect_base().unwrap_or("main".to_string())
+            });
+            match application::stack::create_plan(&base, max_files, max_lines) {
+                Ok(plan) => {
+                    eprintln!("  \x1b[32m✓\x1b[0m Stack plan: {} PRs written to .cortex-cache/stack-plan.json", plan.prs.len());
+                    for stack_pr in &plan.prs {
+                        eprintln!("    #{} {} ({} files, risk: {})",
+                            stack_pr.order, stack_pr.title,
+                            stack_pr.files.len(), stack_pr.risk_level);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("  \x1b[31mStack plan failed: {}\x1b[0m", error);
+                    std::process::exit(1);
+                }
+            }
+        }
+        StackAction::Apply { plan, dry_run } => {
+            match application::stack::apply_plan(plan.as_deref(), dry_run) {
+                Ok(pr_urls) => {
+                    if dry_run {
+                        eprintln!("  \x1b[33mDry run complete — no changes made\x1b[0m");
+                    } else {
+                        eprintln!("  \x1b[32m✓\x1b[0m Created {} PRs", pr_urls.len());
+                    }
+                }
+                Err(error) => {
+                    eprintln!("  \x1b[31mStack apply failed: {}\x1b[0m", error);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
+
+fn run_install() {
+    let skill_content = include_str!("../../.claude/skills/cortex/SKILL.md");
+
+    for name in &["cortex", "kapa"] {
+        let skill_dir = PathBuf::from(format!(".claude/skills/{}", name));
+        std::fs::create_dir_all(&skill_dir).unwrap_or_else(|e| {
+            eprintln!("  \x1b[31mFailed to create {}: {}\x1b[0m", skill_dir.display(), e);
+            std::process::exit(1);
+        });
+
+        let skill_path = skill_dir.join("SKILL.md");
+        std::fs::write(&skill_path, skill_content).unwrap_or_else(|e| {
+            eprintln!("  \x1b[31mFailed to write {}: {}\x1b[0m", skill_path.display(), e);
+            std::process::exit(1);
+        });
+
+        eprintln!("  \x1b[32m✓\x1b[0m Installed /{} → {}", name, skill_path.display());
     }
 }
 
@@ -141,7 +211,40 @@ fn start_daemon() {
     }
 }
 
+fn check_tools() {
+    let required = [
+        ("ctags", "brew install universal-ctags  /  apt install universal-ctags  /  dnf install ctags"),
+    ];
+    let optional = [
+        ("lizard", "pip install lizard  (complexity metrics will be skipped without it)"),
+    ];
+    for (tool, hint) in &required {
+        let found = std::process::Command::new("which").arg(tool).output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if found {
+            eprintln!("  \x1b[32m✓\x1b[0m {}", tool);
+        } else {
+            eprintln!("  \x1b[31m✗\x1b[0m {} not found — {}", tool, hint);
+            std::process::exit(1);
+        }
+    }
+    for (tool, hint) in &optional {
+        let found = std::process::Command::new("which").arg(tool).output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if found {
+            eprintln!("  \x1b[32m✓\x1b[0m {}", tool);
+        } else {
+            eprintln!("  \x1b[33m⚠\x1b[0m {} not found — {}", tool, hint);
+        }
+    }
+}
+
 fn run_index(root: &str) {
+    eprintln!("  \x1b[36m→ Checking tools...\x1b[0m");
+    check_tools();
+
     let db_path = PathBuf::from(format!("{}/.cortex-cache/index.db", root));
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).ok();
@@ -157,16 +260,6 @@ fn run_index(root: &str) {
         eprintln!("  \x1b[31mIndex error: {}\x1b[0m", e);
         std::process::exit(1);
     }
-    db.with_conn(|conn| {
-        if let (Ok(files), Ok(symbols), Ok(edges), Ok(calls)) = (
-            infrastructure::sqlite::file_count(conn),
-            infrastructure::sqlite::symbol_count(conn),
-            infrastructure::sqlite::edge_count(conn),
-            infrastructure::sqlite::call_count(conn),
-        ) {
-            eprintln!("  \x1b[32m✓\x1b[0m Done: {} files, {} symbols, {} edges, {} calls", files, symbols, edges, calls);
-        }
-    });
 }
 
 fn ensure_daemon() {
@@ -516,6 +609,61 @@ fn print_briefing(action: &str, data: &serde_json::Value) {
     }
 }
 
+fn run_owner(file: &str, mode: OutputMode) {
+    let db = open_db();
+    let buck_results = db.with_conn(|conn| {
+        infrastructure::sqlite::find_target_for_file(conn, file).unwrap_or_default()
+    });
+    let cmake_results = infrastructure::cmake::find_cmake_owner(file);
+    let has_any = !buck_results.is_empty() || !cmake_results.is_empty();
+
+    match mode {
+        OutputMode::Json => {
+            let buck_json: Vec<_> = buck_results.iter().map(|t| {
+                let pkg = infrastructure::buck2::package_from_targets_path(&t.path);
+                serde_json::json!({"label": format!("//{}:{}", pkg, t.name), "rule": t.rule, "deps": t.deps})
+            }).collect();
+            let cmake_json: Vec<_> = cmake_results.iter().map(|c| {
+                serde_json::json!({"target": c.target_name, "rule": c.rule, "cmake_file": c.cmake_file})
+            }).collect();
+            println!("{}", serde_json::json!({"file": file, "buck2": buck_json, "cmake": cmake_json}));
+        }
+        OutputMode::Briefing => {
+            if !has_any {
+                println!("owner: none found for {}", file);
+            } else {
+                println!("file: {}", file);
+                for t in &buck_results {
+                    let pkg = infrastructure::buck2::package_from_targets_path(&t.path);
+                    println!("  [buck2] //{}:{} {}", pkg, t.name, t.rule);
+                }
+                for c in &cmake_results {
+                    println!("  [cmake] {} ({}) in {}", c.target_name, c.rule, c.cmake_file);
+                }
+            }
+        }
+        OutputMode::Text => {
+            if !has_any {
+                println!("  No target found owning {}", file);
+            } else {
+                println!("  \x1b[1mOwners of {}\x1b[0m\n", file);
+                for t in &buck_results {
+                    let pkg = infrastructure::buck2::package_from_targets_path(&t.path);
+                    println!("  \x1b[36m[buck2]\x1b[0m //{}:{}  ({})", pkg, t.name, t.rule);
+                    if let Some(ref deps) = t.deps {
+                        if deps != "[]" && !deps.is_empty() {
+                            println!("    deps: {}", deps);
+                        }
+                    }
+                }
+                for c in &cmake_results {
+                    println!("  \x1b[35m[cmake]\x1b[0m {}  ({})  — {}", c.target_name, c.rule, c.cmake_file);
+                }
+            }
+        }
+    }
+}
+
 fn run_buck2(action: Buck2Action) {
     let db = open_db();
     db.with_conn(|conn| {
@@ -547,36 +695,6 @@ fn run_buck2(action: Buck2Action) {
                     }
                 }
             }
-            Buck2Action::Owner { file, brief } => {
-                let results = infrastructure::sqlite::find_target_for_file(conn, &file).unwrap();
-                if brief {
-                    if results.is_empty() {
-                        println!("owner: none found for {}", file);
-                    } else {
-                        println!("file: {}", file);
-                        for t in &results {
-                            let pkg = infrastructure::buck2::package_from_targets_path(&t.path);
-                            let dep_info = t.deps.as_deref().unwrap_or("[]");
-                            println!("  //{}:{} {} deps={}", pkg, t.name, t.rule, dep_info);
-                        }
-                    }
-                } else {
-                    if results.is_empty() {
-                        println!("  No target found owning {}", file);
-                    } else {
-                        println!("  \x1b[1mOwners of {}\x1b[0m\n", file);
-                        for t in &results {
-                            let pkg = infrastructure::buck2::package_from_targets_path(&t.path);
-                            println!("  //{}:{}  ({})", pkg, t.name, t.rule);
-                            if let Some(ref deps) = t.deps {
-                                if deps != "[]" && !deps.is_empty() {
-                                    println!("    deps: {}", deps);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             Buck2Action::Deps { label, brief } => {
                 let deps = infrastructure::sqlite::target_deps(conn, &label).unwrap();
                 if brief {
@@ -604,34 +722,34 @@ fn run_buck2(action: Buck2Action) {
 }
 
 fn stop_daemon() {
-    use std::io::{Read, Write};
-    use std::os::unix::net::UnixStream;
-    let mut stream = match UnixStream::connect(iface::server::SOCKET_PATH) {
-        Ok(s) => s,
-        Err(_) => { eprintln!("  \x1b[33mNo daemon running.\x1b[0m"); return; }
+    let pid_str = match std::fs::read_to_string(iface::server::PID_PATH) {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => {
+            eprintln!("  \x1b[33mNo daemon running (no PID file).\x1b[0m");
+            return;
+        }
     };
-    let payload = serde_json::json!({"action": "shutdown", "params": {}});
-    let bytes = serde_json::to_vec(&payload).unwrap();
-    stream.write_all(&(bytes.len() as u64).to_be_bytes()).ok();
-    stream.write_all(&bytes).ok();
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).ok();
-    eprintln!("  \x1b[32mDaemon stopped.\x1b[0m");
+    let pid: u32 = match pid_str.parse() {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("  \x1b[31mInvalid PID file.\x1b[0m");
+            return;
+        }
+    };
+    let result = std::process::Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status();
+    match result {
+        Ok(status) if status.success() => {
+            std::fs::remove_file(iface::server::PID_PATH).ok();
+            std::fs::remove_file(iface::server::SOCKET_PATH).ok();
+            eprintln!("  \x1b[32m✓\x1b[0m Daemon stopped.");
+        }
+        _ => eprintln!("  \x1b[33mDaemon not running (stale PID {}).\x1b[0m", pid),
+    }
 }
 
 fn daemon_status() {
     query("status", serde_json::json!({}), OutputMode::Json);
 }
 
-fn install_skill() {
-    let skill_bytes = include_bytes!("../../.claude/skills/kapa-cortex/SKILL.md");
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    let dst = std::path::PathBuf::from(home).join(".claude/skills/kapa-cortex/SKILL.md");
-    if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    match std::fs::write(&dst, skill_bytes) {
-        Ok(_) => eprintln!("  \x1b[32m✓\x1b[0m Skill installed to {}", dst.display()),
-        Err(e) => eprintln!("  \x1b[31mFailed: {}\x1b[0m", e),
-    }
-}
